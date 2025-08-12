@@ -16,10 +16,8 @@ param(
   [int]$MaxTerraform = 8,
 
   # Which Terraform repos to watch (owner/repo)
-  [string[]]$TerraformRepos = @(
-    'hashicorp/terraform',
-    'hashicorp/terraform-provider-azurerm'
-  ),
+  # [string[]]$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm"),
+  
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
   [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=weekly'
@@ -51,6 +49,8 @@ $HeadersGitHub = @{
   'Accept'        = 'application/vnd.github+json'
   'X-GitHub-Api-Version' = '2022-11-28'
 }
+
+$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
 
 function Log($m){ Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $m" }
 
