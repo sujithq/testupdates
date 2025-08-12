@@ -22,6 +22,11 @@ param(
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
   [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=weekly'
+  ,
+  # Time window mode: 'week' (Mon-Sun current week) or 'rolling'
+  [ValidateSet('week','rolling')][string]$WindowType = 'week',
+  # When WindowType=rolling, number of days back (exclusive of future) to include
+  [int]$RollingDays = 7
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -38,19 +43,56 @@ $HeadersGitHub = @{
 
 function Log($m){ Write-Host "[$(Get-Date -Format 'HH:mm:ss')] $m" }
 
-# --- Week window (Mon–Sun) based on Europe/Brussels, formatted in UTC for APIs
+# --- Time window setup
 $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('Romance Standard Time') # Brussels
-$nowLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc([DateTime]::UtcNow, $tz)
-$dayOfWeek = [int]$nowLocal.DayOfWeek  # Mon=1 .. Sun=0
-$daysSinceMonday = ($dayOfWeek + 6) % 7
-$weekStartLocal = $nowLocal.Date.AddDays(-$daysSinceMonday)
-$weekEndLocal   = $weekStartLocal.AddDays(7).AddSeconds(-1)
-$weekStartUtc   = [System.TimeZoneInfo]::ConvertTimeToUtc($weekStartLocal, $tz)
-$weekEndUtc     = [System.TimeZoneInfo]::ConvertTimeToUtc($weekEndLocal, $tz)
+$nowUtc = [DateTime]::UtcNow
+if($WindowType -eq 'rolling'){
+  if($RollingDays -lt 1){ throw 'RollingDays must be >= 1' }
+  $weekEndUtc = $nowUtc
+  $weekStartUtc = $nowUtc.Date.AddDays(-$RollingDays)
+  $weekStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($weekStartUtc,$tz)
+  $weekEndLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($weekEndUtc,$tz)
+  # Derive ISO week from the start for naming (may span weeks)
+  $isoWeek = [System.Globalization.ISOWeek]::GetWeekOfYear($weekStartLocal)
+  $yearForWeek = [System.Globalization.ISOWeek]::GetYear($weekStartLocal)
+} else {
+  $nowLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $tz)
+  $dayOfWeek = [int]$nowLocal.DayOfWeek  # Mon=1 .. Sun=0
+  $daysSinceMonday = ($dayOfWeek + 6) % 7
+  $weekStartLocal = $nowLocal.Date.AddDays(-$daysSinceMonday)
+  $weekEndLocal   = $weekStartLocal.AddDays(7).AddSeconds(-1)
+  $weekStartUtc   = [System.TimeZoneInfo]::ConvertTimeToUtc($weekStartLocal, $tz)
+  $weekEndUtc     = [System.TimeZoneInfo]::ConvertTimeToUtc($weekEndLocal, $tz)
+  $isoWeek = [System.Globalization.ISOWeek]::GetWeekOfYear($weekStartLocal)
+  $yearForWeek = [System.Globalization.ISOWeek]::GetYear($weekStartLocal)
+}
 
-# ISO week number for title/slug
-$isoWeek = [System.Globalization.ISOWeek]::GetWeekOfYear($weekStartLocal)
-$yearForWeek = [System.Globalization.ISOWeek]::GetYear($weekStartLocal)
+# Parse frequency map early (needed for per-source windows)
+$FrequencyMap = @{}
+foreach($pair in ($Frequencies -split ',')){
+  $p = $pair.Trim(); if(-not $p){ continue }
+  $kv = $p -split '='; if($kv.Count -ne 2){ continue }
+  $FrequencyMap[$kv[0]] = $kv[1].ToLowerInvariant()
+}
+
+# Per-source window overrides
+$AzureWindowStartUtc = $weekStartUtc; $AzureWindowEndUtc = $weekEndUtc
+
+if($FrequencyMap.ContainsKey('GitHub') -and $FrequencyMap['GitHub'] -eq 'biweekly'){
+  $GitHubWindowStartUtc = $weekStartUtc.AddDays(-7)
+} elseif($FrequencyMap.ContainsKey('GitHub') -and $FrequencyMap['GitHub'] -eq 'monthly'){
+  $monthStartLocal = (Get-Date -Date $weekStartLocal).AddDays(1 - $weekStartLocal.Day)
+  $GitHubWindowStartUtc = [System.TimeZoneInfo]::ConvertTimeToUtc($monthStartLocal,$tz)
+} else { $GitHubWindowStartUtc = $weekStartUtc }
+$GitHubWindowEndUtc = $weekEndUtc
+
+if($FrequencyMap.ContainsKey('Terraform') -and $FrequencyMap['Terraform'] -eq 'monthly'){
+  $monthStartLocalTf = (Get-Date -Date $weekStartLocal).AddDays(1 - $weekStartLocal.Day)
+  $TerraformWindowStartUtc = [System.TimeZoneInfo]::ConvertTimeToUtc($monthStartLocalTf,$tz)
+} elseif($FrequencyMap.ContainsKey('Terraform') -and $FrequencyMap['Terraform'] -eq 'biweekly'){
+  $TerraformWindowStartUtc = $weekStartUtc.AddDays(-7)
+} else { $TerraformWindowStartUtc = $weekStartUtc }
+$TerraformWindowEndUtc = $weekEndUtc
 
 # --- GitHub Models (Inference) helper
 function Invoke-GitHubModelChat {
@@ -126,7 +168,7 @@ function Fetch-AzureUpdates {
       if(-not $i.pubDate){ continue }
       $pub = Get-Date $i.pubDate -ErrorAction SilentlyContinue
       if(-not $pub){ continue }
-      if($pub -lt $weekStartUtc -or $pub -gt $weekEndUtc){ continue }
+  if($pub -lt $AzureWindowStartUtc -or $pub -gt $AzureWindowEndUtc){ continue }
       [pscustomobject]@{
         source = 'Azure'
         title = [string]$i.title
@@ -151,7 +193,7 @@ function Fetch-GitHubChangelog {
       if(-not $i.pubDate){ continue }
       $pub = Get-Date $i.pubDate -ErrorAction SilentlyContinue
       if(-not $pub){ continue }
-      if($pub -lt $weekStartUtc -or $pub -gt $weekEndUtc){ continue }
+  if($pub -lt $GitHubWindowStartUtc -or $pub -gt $GitHubWindowEndUtc){ continue }
       [pscustomobject]@{
         source = 'GitHub'
         title  = [string]$i.title
@@ -180,7 +222,7 @@ function Fetch-Terraform {
     foreach($r in $rels){
       if(-not $r.published_at){ continue }
       $pub = [datetime]::Parse($r.published_at).ToUniversalTime()
-      if($pub -lt $weekStartUtc -or $pub -gt $weekEndUtc){ continue }
+  if($pub -lt $TerraformWindowStartUtc -or $pub -gt $TerraformWindowEndUtc){ continue }
       $body = [string]($r.body ?? '')
       $items += [pscustomobject]@{
         source = 'Terraform'
@@ -252,35 +294,61 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
   return $lines -join "`n"
 }
 
-function Render-Body($items){
+function Render-Body($items,$windowStartLocal,$windowEndLocal){
   $lines = @()
-  $lines += "## This week at a glance"
-  # Blank line after heading (MD022)
+  $lines += "## This period at a glance"
   $lines += ''
-  # Avoid MD036; no trailing explicit newline to prevent MD012
-  $lines += "**Window:** $($weekStartLocal.ToString('yyyy-MM-dd')) → $($weekEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)"
-  # Blank line before list (MD032)
+  $lines += "**Window:** $($windowStartLocal.ToString('yyyy-MM-dd')) → $($windowEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)"
   $lines += ''
   foreach($x in ($items | Sort-Object date -Descending)){
     $bul = ToBulletMd $x.bullets
-  $fmtUrl = Format-LinkUrl $x.url
-  $line = "- **[$([string](MdEscape $x.title))]($fmtUrl)** — $([string](MdEscape $x.summary))"
+    $fmtUrl = Format-LinkUrl $x.url
+    $line = "- **[$([string](MdEscape $x.title))]($fmtUrl)** — $([string](MdEscape $x.summary))"
     if($bul){ $line += "`n$bul" }
     $lines += $line
   }
   return ($lines -join "`n") + "`n"
 }
 
-function Write-PerTypePost($typeName,$slugBase,$items,$tag){
+function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$winEndUtc){
   if(-not $items -or $items.Count -eq 0){ return $null }
-  $title = "$typeName Weekly – $yearForWeek Week $isoWeek"
-  $desc  = "Highlights from $typeName between $($weekStartLocal.ToString('yyyy-MM-dd')) and $($weekEndLocal.ToString('yyyy-MM-dd'))."
-    $tags  = @('weekly', $tag)
-  $fm = New-FrontMatter -title $title -desc $desc -tags $tags
-  $body = Render-Body -items $items
+  $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($winStartUtc,$tz)
+  $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($winEndUtc,$tz)
+  $tagsArr = @('weekly', $tag)  # keep 'weekly' tag for taxonomy simplicity
 
-  $yearMonth = ('{0:0000}-{1:00}' -f $yearForWeek, $weekStartLocal.Month)
-  $folderName = "$yearMonth-$slugBase-w$('{0:D2}' -f $isoWeek)"
+  # Determine dynamic title & slug
+  switch($freq){
+    'biweekly' {
+      $w1 = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
+      $w2 = [System.Globalization.ISOWeek]::GetWeekOfYear($winEndLocal)
+      $y1 = [System.Globalization.ISOWeek]::GetYear($winStartLocal)
+      $y2 = [System.Globalization.ISOWeek]::GetYear($winEndLocal)
+      $weekSpan = if($w1 -eq $w2){ "Week $w1" } else { "Weeks $w1–$w2" }
+      $yearSpan = if($y1 -eq $y2){ $y1 } else { "$y1–$y2" }
+      $title = "$typeName Biweekly – $weekSpan $yearSpan"
+      if($baseSlug -match 'weekly'){ $slug = ($baseSlug -replace 'weekly','biweekly') } else { $slug = "$baseSlug-biweekly" }
+      $folderName = ('{0:0000}-{1:00}-{2}-w{3:D2}-{4:D2}' -f $y1,$winStartLocal.Month,$slug,$w1,$w2)
+    }
+    'monthly' {
+      $monthName = $winStartLocal.ToString('MMMM')
+      $yearM = $winStartLocal.Year
+      $title = "$typeName Monthly – $monthName $yearM"
+      if($baseSlug -match 'weekly'){ $slug = ($baseSlug -replace 'weekly','monthly') } else { $slug = "$baseSlug-monthly" }
+      $folderName = ('{0:0000}-{1:00}-{2}' -f $yearM,$winStartLocal.Month,$slug)
+    }
+    default {
+      $w = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
+      $yw = [System.Globalization.ISOWeek]::GetYear($winStartLocal)
+      $title = "$typeName Weekly – $yw Week $w"
+      $slug = $baseSlug
+      $folderName = ('{0:0000}-{1:00}-{2}-w{3:D2}' -f $yw,$winStartLocal.Month,$slug,$w)
+    }
+  }
+
+  $desc  = "Highlights from $typeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
+  $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
+  $body = Render-Body -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
+
   $targetDir = Join-Path $RepoRoot $ContentDir
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
   $folder = Join-Path $targetDir $folderName
@@ -299,19 +367,11 @@ $map = @(
   @{ Name='Terraform'; Slug='terraform-weekly'; Tag='terraform' }
 )
 
-# Parse frequency map
-$FrequencyMap = @{}
-foreach($pair in ($Frequencies -split ',')){
-  $p = $pair.Trim(); if(-not $p){ continue }
-  $kv = $p -split '='; if($kv.Count -ne 2){ continue }
-  $FrequencyMap[$kv[0]] = $kv[1].ToLowerInvariant()
-}
-
 function Should-EmitSource([string]$sourceName){
   $freq = if($FrequencyMap.ContainsKey($sourceName)){ $FrequencyMap[$sourceName] } else { 'weekly' }
   switch($freq){
-    'weekly'   { return $true }
-    'biweekly' { return (($isoWeek % 2) -eq 0) }  # emit on even ISO weeks only
+  'weekly'   { return $true }
+  'biweekly' { return $true }  # always emit; window already spans 2 weeks
     'monthly'  { return ($weekStartLocal.Day -le 7) } # emit only during first week of month
     default    { return $true }
   }
@@ -326,7 +386,15 @@ foreach($m in $map){
   if($groups.ContainsKey($name)){
     if(Should-EmitSource $name){
       $itemsForSource = $groups[$name]
-      $path = Write-PerTypePost -typeName $name -slugBase $m.Slug -items $itemsForSource -tag $m.Tag
+      # Determine window used for this source
+      switch($name){
+        'Azure'     { $ws=$AzureWindowStartUtc; $we=$AzureWindowEndUtc }
+        'GitHub'    { $ws=$GitHubWindowStartUtc; $we=$GitHubWindowEndUtc }
+        'Terraform' { $ws=$TerraformWindowStartUtc; $we=$TerraformWindowEndUtc }
+        default     { $ws=$weekStartUtc; $we=$weekEndUtc }
+      }
+      $freq = if($FrequencyMap.ContainsKey($name)){ $FrequencyMap[$name] } else { 'weekly' }
+      $path = Write-PerTypePost -typeName $name -baseSlug $m.Slug -items $itemsForSource -tag $m.Tag -freq $freq -winStartUtc $ws -winEndUtc $we
       if($path){ $written += $path }
     } else {
       Log "Skipping $name this week due to frequency cadence"
