@@ -90,6 +90,13 @@ function Trunc([string]$s,[int]$n=300){ if(-not $s){return ''}; if($s.Length -le
 function MdEscape([string]$s){ if(-not $s){return ''}; $s -replace '\|','\\|' }
 function ToBulletMd($arr){ if(-not $arr -or $arr.Count -eq 0){ return '' }; ($arr | ForEach-Object { "  - " + ($_ -replace '\n',' ') }) -join "`n" }
 
+# Wrap bare URLs in <> to avoid markdownlint MD034 (no-bare-urls)
+function Fix-BareUrls([string]$text){
+  if(-not $text){ return $text }
+  # Skip if already part of a markdown link [text](url)
+  return ($text -replace '(?<!\]\()https?://[\w\-\./%?&#=+:~]+', '<$0>')
+}
+
 # --- Sources
 $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consolidated RSS
 
@@ -192,13 +199,18 @@ RAW:\n$([string]$item.raw)
 "@
   $out = Invoke-GitHubModelChat -Prompt $prompt
   if(-not $out.summary){ $out = @{ summary = Trunc($item.title, 200) } }
+  $cleanSummary = Fix-BareUrls (($out.summary -replace '\s+',' ').Trim())
+  $cleanBullets = @()
+  foreach($b in @($out.bullets)){
+    if($b){ $cleanBullets += (Fix-BareUrls (($b -replace '\s+',' ').Trim())) }
+  }
   return [pscustomobject]@{
     source = $item.source
     title  = $item.title
     url    = $item.url
     date   = $item.publishedAt.ToString('yyyy-MM-dd')
-    summary = ($out.summary -replace '\s+',' ').Trim()
-    bullets = @($out.bullets)
+    summary = $cleanSummary
+    bullets = $cleanBullets
   }
 }
 
