@@ -129,7 +129,7 @@ function Fetch-GitHubChangelog {
 function Fetch-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
   $uri = "https://api.github.com/repos/$owner/$repo/releases?per_page=$limit"
   try { return Invoke-RestMethod -Uri $uri -Headers $HeadersGitHub -Method GET }
-  catch { Write-Warning "Releases fetch failed for $owner/$repo: $_"; return @() }
+  catch { Write-Warning "Releases fetch failed for $owner/$repo $_"; return @() }
 }
 function Fetch-Terraform {
   Log 'Fetch: Terraform releases'
