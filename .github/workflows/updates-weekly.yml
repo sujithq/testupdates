@@ -23,7 +23,7 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          pwsh ./scripts/updates-weekly.ps1 -RepoRoot . -ContentDir 'content/updates' -MaxAzure 20 -MaxGitHub 12 -MaxTerraform 8
+          pwsh ./.github/scripts/updates-weekly.ps1 -RepoRoot . -ContentDir 'content/updates' -MaxAzure 20 -MaxGitHub 12 -MaxTerraform 8
 
       - name: Commit & push (if changed)
         run: |
