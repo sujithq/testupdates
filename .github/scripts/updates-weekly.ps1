@@ -97,6 +97,18 @@ function Fix-BareUrls([string]$text){
   return ($text -replace '(?<!\]\()https?://[\w\-\./%?&#=+:~]+', '<$0>')
 }
 
+# Normalize URL for markdown link: remove stray trailing ' link' and wrap in < > when query chars present
+function Format-LinkUrl([string]$u){
+  if(-not $u){ return '' }
+  $clean = $u.Trim()
+  $clean = $clean -replace '\s+link$',''  # remove literal trailing word 'link'
+  # If already enclosed in <>, leave; else wrap when contains query/ampersand or spaces
+  if($clean -notmatch '^<.*>$'){
+    if($clean -match '[?&]|%'){ $clean = "<$clean>" }
+  }
+  return $clean
+}
+
 # --- Sources
 $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consolidated RSS
 
@@ -248,7 +260,8 @@ function Render-Body($items){
   $lines += ''
   foreach($x in ($items | Sort-Object date -Descending)){
     $bul = ToBulletMd $x.bullets
-    $line = "- **[$([string](MdEscape $x.title))]($($x.url))** — $([string](MdEscape $x.summary))"
+  $fmtUrl = Format-LinkUrl $x.url
+  $line = "- **[$([string](MdEscape $x.title))]($fmtUrl)** — $([string](MdEscape $x.summary))"
     if($bul){ $line += "`n$bul" }
     $lines += $line
   }
