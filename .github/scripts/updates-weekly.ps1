@@ -91,7 +91,7 @@ function MdEscape([string]$s){ if(-not $s){return ''}; $s -replace '\|','\\|' }
 function ToBulletMd($arr){ if(-not $arr -or $arr.Count -eq 0){ return '' }; ($arr | ForEach-Object { "  - " + ($_ -replace '\n',' ') }) -join "`n" }
 
 # --- Sources
-$AzureRss = 'https://aztty.azurewebsites.net/rss'  # Azure Charts consolidated RSS
+$AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consolidated RSS
 
 function Fetch-AzureUpdates {
   Log 'Fetch: Azure updates (Azure Charts RSS)'
