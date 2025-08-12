@@ -498,7 +498,7 @@ function Test-EmitSource([string]$sourceName){
   switch($freq){
   'weekly'   { return $true }
   'biweekly' { return $true }  # always emit; window already spans 2 weeks
-    'monthly'  { return ($weekStartLocal.Day -le 7) } # emit only during first week of month
+  'monthly'  { return $true } # always emit; window already spans full month
     default    { return $true }
   }
 }
