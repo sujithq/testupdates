@@ -266,7 +266,8 @@ function Get-TerraformReleases {
   $repoArray = $repoArray | Where-Object { $_ -and ($_ -is [string]) }
   $joinedRepos = if($repoArray.Count -gt 0){ $repoArray -join ', ' } else { '(none)' }
   Log "Terraform repositories: $joinedRepos"
-  foreach($rr in $repoArray){ if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
+  foreach($rr in $repoArray){ 
+    if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
   $items = @()
   $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0; $totalSkippedNoDate = 0
   $swTf = [System.Diagnostics.Stopwatch]::StartNew()
