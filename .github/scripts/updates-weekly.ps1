@@ -52,9 +52,6 @@ if($WindowType -eq 'rolling'){
   $weekStartUtc = $nowUtc.Date.AddDays(-$RollingDays)
   $weekStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($weekStartUtc,$tz)
   $weekEndLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($weekEndUtc,$tz)
-  # Derive ISO week from the start for naming (may span weeks)
-  $isoWeek = [System.Globalization.ISOWeek]::GetWeekOfYear($weekStartLocal)
-  $yearForWeek = [System.Globalization.ISOWeek]::GetYear($weekStartLocal)
 } else {
   $nowLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($nowUtc, $tz)
   $dayOfWeek = [int]$nowLocal.DayOfWeek  # Mon=1 .. Sun=0
@@ -63,8 +60,6 @@ if($WindowType -eq 'rolling'){
   $weekEndLocal   = $weekStartLocal.AddDays(7).AddSeconds(-1)
   $weekStartUtc   = [System.TimeZoneInfo]::ConvertTimeToUtc($weekStartLocal, $tz)
   $weekEndUtc     = [System.TimeZoneInfo]::ConvertTimeToUtc($weekEndLocal, $tz)
-  $isoWeek = [System.Globalization.ISOWeek]::GetWeekOfYear($weekStartLocal)
-  $yearForWeek = [System.Globalization.ISOWeek]::GetYear($weekStartLocal)
 }
 
 # Parse frequency map early (needed for per-source windows)
@@ -136,7 +131,7 @@ function MdEscape([string]$s){ if(-not $s){return ''}; $s -replace '\|','\\|' }
 function ToBulletMd($arr){ if(-not $arr -or $arr.Count -eq 0){ return '' }; ($arr | ForEach-Object { "  - " + ($_ -replace '\n',' ') }) -join "`n" }
 
 # Wrap bare URLs in <> to avoid markdownlint MD034 (no-bare-urls)
-function Fix-BareUrls([string]$text){
+function Format-BareUrls([string]$text){
   if(-not $text){ return $text }
   # Skip if already part of a markdown link [text](url)
   return ($text -replace '(?<!\]\()https?://[\w\-\./%?&#=+:~]+', '<$0>')
@@ -157,7 +152,7 @@ function Format-LinkUrl([string]$u){
 # --- Sources
 $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consolidated RSS
 
-function Fetch-AzureUpdates {
+function Get-AzureUpdates {
   Log 'Fetch: Azure updates (Azure Charts RSS)'
   try {
     $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -182,7 +177,7 @@ function Fetch-AzureUpdates {
 }
 
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
-function Fetch-GitHubChangelog {
+function Get-GitHubChangelog {
   Log 'Fetch: GitHub Changelog RSS'
   try {
     $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -206,12 +201,12 @@ function Fetch-GitHubChangelog {
   } catch { Write-Warning "GitHub Changelog RSS failed: $($_.Exception.Message)"; return @() }
 }
 
-function Fetch-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
+function Get-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
   $uri = "https://api.github.com/repos/$owner/$repo/releases?per_page=$limit"
   try { return Invoke-RestMethod -Uri $uri -Headers $HeadersGitHub -Method GET }
   catch { Write-Warning "Releases fetch failed for $owner/$repo $_"; return @() }
 }
-function Fetch-Terraform {
+function Get-TerraformReleases {
   Log 'Fetch: Terraform releases'
   $items = @()
   foreach($full in $TerraformRepos){
@@ -237,14 +232,14 @@ function Fetch-Terraform {
 }
 
 # --- Collect and summarize
-$azure = Fetch-AzureUpdates
-$ghchg = Fetch-GitHubChangelog
-$tf    = Fetch-Terraform
+$azure = Get-AzureUpdates
+$ghchg = Get-GitHubChangelog
+$tf    = Get-TerraformReleases
 
 $all = @($azure + $ghchg + $tf)
 Log ("Collected: Azure={0}, GitHub={1}, Terraform={2}" -f $azure.Count, $ghchg.Count, $tf.Count)
 
-function Summarize-Item($item){
+function Get-ItemSummary($item){
   $prompt = @"
 Summarize the following update for a weekly newsletter. Keep it factual. Mention product/area and any version/flag/region/date specifics.
 
@@ -256,10 +251,10 @@ RAW:\n$([string]$item.raw)
 "@
   $out = Invoke-GitHubModelChat -Prompt $prompt
   if(-not $out.summary){ $out = @{ summary = Trunc($item.title, 200) } }
-  $cleanSummary = Fix-BareUrls (($out.summary -replace '\s+',' ').Trim())
+  $cleanSummary = Format-BareUrls (($out.summary -replace '\s+',' ').Trim())
   $cleanBullets = @()
   foreach($b in @($out.bullets)){
-    if($b){ $cleanBullets += (Fix-BareUrls (($b -replace '\s+',' ').Trim())) }
+  if($b){ $cleanBullets += (Format-BareUrls (($b -replace '\s+',' ').Trim())) }
   }
   return [pscustomobject]@{
     source = $item.source
@@ -272,7 +267,7 @@ RAW:\n$([string]$item.raw)
 }
 
 $summaries = @()
-foreach($i in $all){ if(-not $i){ continue }; try { $summaries += (Summarize-Item $i) } catch { Write-Warning "Summarize failed for item: $($_.Exception.Message)" } }
+foreach($i in $all){ if(-not $i){ continue }; try { $summaries += (Get-ItemSummary $i) } catch { Write-Warning "Summarize failed for item: $($_.Exception.Message)" } }
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
@@ -294,7 +289,7 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
   return $lines -join "`n"
 }
 
-function Render-Body($items,$windowStartLocal,$windowEndLocal){
+function Convert-ItemsToMarkdown($items,$windowStartLocal,$windowEndLocal){
   $lines = @()
   $lines += "## This period at a glance"
   $lines += ''
@@ -314,7 +309,9 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   if(-not $items -or $items.Count -eq 0){ return $null }
   $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($winStartUtc,$tz)
   $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($winEndUtc,$tz)
-  $tagsArr = @('weekly', $tag)  # keep 'weekly' tag for taxonomy simplicity
+  # Tags: primary = cadence (weekly|biweekly|monthly), secondary = source tag
+  $cadenceTag = if($freq){ $freq } else { 'weekly' }
+  $tagsArr = @('updates', $cadenceTag, $tag) | Select-Object -Unique
 
   # Determine dynamic title & slug
   switch($freq){
@@ -347,7 +344,7 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
 
   $desc  = "Highlights from $typeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
   $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
-  $body = Render-Body -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
+  $body = Convert-ItemsToMarkdown -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
 
   $targetDir = Join-Path $RepoRoot $ContentDir
   New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
@@ -367,7 +364,7 @@ $map = @(
   @{ Name='Terraform'; Slug='terraform-weekly'; Tag='terraform' }
 )
 
-function Should-EmitSource([string]$sourceName){
+function Test-EmitSource([string]$sourceName){
   $freq = if($FrequencyMap.ContainsKey($sourceName)){ $FrequencyMap[$sourceName] } else { 'weekly' }
   switch($freq){
   'weekly'   { return $true }
@@ -384,7 +381,7 @@ foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
 foreach($m in $map){
   $name = $m.Name
   if($groups.ContainsKey($name)){
-    if(Should-EmitSource $name){
+  if(Test-EmitSource $name){
       $itemsForSource = $groups[$name]
       # Determine window used for this source
       switch($name){
