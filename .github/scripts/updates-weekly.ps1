@@ -96,6 +96,12 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
   Write-Warning "Frequencies value '$Frequencies' does not contain '='; did you forget a comma between Terraform repos? Use: -TerraformRepos 'org/a','org/b'"
 }
 
+Write-Host "!!!!!Test"
+$myArray = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
+foreach ($item in $myArray) {
+     Write-Host "!!!!Item: $item"
+}
+
 # Validate pattern
 $invalid = @()
 foreach($tr in $TerraformRepos)
