@@ -213,7 +213,7 @@ function Get-TerraformReleases {
     $parts = $full.Split('/')
     if($parts.Count -ne 2){ continue }
     $owner=$parts[0]; $repo=$parts[1]
-    $rels = Fetch-GitHubReleases -owner $owner -repo $repo -limit 8
+  $rels = Get-GitHubReleases -owner $owner -repo $repo -limit 8
     foreach($r in $rels){
       if(-not $r.published_at){ continue }
       $pub = [datetime]::Parse($r.published_at).ToUniversalTime()
