@@ -98,7 +98,7 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
 
 Write-Host "!!!!!Test"
 $myArray = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
-foreach ($item in $myArray) {
+foreach ($item in $TerraformRepos) {
      Write-Host "!!!!Item: $item"
 }
 
