@@ -1,7 +1,7 @@
 +++
 title = 'Azure Weekly – 2025 Week 33'
-date = 2025-08-12T14:36:22Z
-lastmod = 2025-08-12T14:36:22Z
+date = 2025-08-12T20:11:01Z
+lastmod = 2025-08-12T20:11:01Z
 draft = false
 tags = ['updates', 'weekly', 'azure']
 description = 'Highlights from Azure between 2025-08-11 and 2025-08-17.'
@@ -12,51 +12,18 @@ description = 'Highlights from Azure between 2025-08-11 and 2025-08-17.'
 
 **Window:** 2025-08-11 → 2025-08-17 (Europe/Brussels)
 
-- **[Private Pod Subnets in AKS Without Overlay Networking](https://techcommunity.microsoft.com/blog/appsonazureblog/private-pod-subnets-in-aks-without-overlay-networking/4442510)** — Azure Kubernetes Service (AKS) now supports private pod subnets without the need for overlay networking, addressing IP address space concerns for deployments in corporate networks.
-  - Feature: Private pod subnets in AKS
-  - No overlay networking required
-  - Targets Kubernetes Service and Virtual Network
-  - Announcement date: August 12, 2025
-- **[Announcing Tenant-Level Service Health Alerts in Azure Monitor](<https://azure.microsoft.com/updates?id=499776>)** — Azure Monitor has introduced Tenant-Level Service Health Alerts in preview, allowing customers to receive notifications about service health issues affecting their entire tenant. This feature enhances management capabilities by providing a broader view of service health beyond individual subscriptions.
-  - Feature: Tenant-Level Service Health Alerts
-  - Product: Azure Monitor
-  - Update Type: Preview
-  - Date: 2025-08-11
-- **[Introducing Azure App Testing: Scalable End-to-end App Validation](<https://azure.microsoft.com/updates?id=500203>)** — Azure App Testing has been introduced as a preview feature, allowing developers and QA teams to conduct large-scale functional and performance tests using frameworks like Playwright, JMeter, and Locust.
-  - Product: Azure App Testing
-  - Update Type: Preview
-  - Services: Load Testing, Playwright Testing
-  - Date: 2025-08-11
-  - Categories: Features
-- **[General Available: App Service Inbound IPv6 Support](<https://azure.microsoft.com/updates?id=499998>)** — Inbound IPv6 support for public multi-tenant App Service is now generally available across all public Azure regions. This feature applies to multi-tenant apps on Basic, Standard, and Premium SKUs, as well as Functions Consumption, Functions Elastic Premium, and Logic Apps Standard.
-  - General availability of Inbound IPv6 support
-  - Applicable to public multi-tenant App Service
-  - Available in all public Azure regions
-  - Supports Basic, Standard, and Premium SKUs
-  - Includes Functions Consumption, Functions Elastic Premium, and Logic Apps Standard
-- **[Announcing GA of Bicep templates support for Microsoft Entra ID resources](https://devblogs.microsoft.com/identity/bicep-templates-for-microsoft-entra-id-resources-is-ga/)** — Bicep templates for Microsoft Entra ID resources are now generally available as of July 29, 2025, providing declarative infrastructure as code capabilities for core Microsoft Entra ID resources.
-  - General Availability (GA) of Bicep templates for Microsoft Entra ID resources.
-  - Release date: July 29, 2025.
-  - Supports declarative infrastructure as code (IaC) for Microsoft Graph resources.
-- **[Upsert and Script Activity in Azure Data Factory and Azure Synapse Analytics for Azure Database for PostgreSQL](<https://azure.microsoft.com/updates?id=499748>)** — The Upsert method and Script activity support are now generally available in Azure Data Factory and Azure Synapse Analytics for Azure Database for PostgreSQL, enhancing data management capabilities.
-  - General availability of Upsert method and Script activity support.
-  - Applicable to Azure Data Factory and Azure Synapse Analytics.
-  - Supports Azure Database for PostgreSQL.
-  - Release date: August 11, 2025.
-- **[Customer-managed keys for Fabric workspaces is now in Public Preview](https://blog.fabric.microsoft.com/en-US/blog/customer-managed-keys-for-fabric-workspaces-available-in-all-public-regions-now-preview/)** — Customer-managed keys for Microsoft Fabric workspaces are now in public preview, available in all public regions as of August 11, 2025. This feature enhances compliance and data protection options for users globally.
-  - Feature: Customer-managed keys (CMK)
-  - Product: Microsoft Fabric workspaces
-  - Availability: Public preview
-  - Regions: All public regions
-  - Date: August 11, 2025
-- **[Introducing support for Workspace Identity Authentication in Fabric Connectors](https://blog.fabric.microsoft.com/en-US/blog/announcing-support-for-workspace-identity-authentication-in-new-fabric-connectors-and-for-dataflow-gen2/)** — Microsoft Fabric has introduced support for Workspace Identity Authentication in Fabric Connectors as of August 11, 2025. This feature aims to simplify credential management and enhance security for data access across organizations.
-  - Feature: Workspace Identity Authentication
-  - Product: Microsoft Fabric
-  - Update Date: August 11, 2025
-  - Focus: Security and credential management
-  - Excludes: My Workspaces
-- **[How Microsoft OneLake seamlessly provides Apache Iceberg support for all Fabric Data](https://blog.fabric.microsoft.com/en-US/blog/how-to-access-your-microsoft-fabric-tables-in-apache-iceberg-format/)** — Microsoft OneLake now supports Apache Iceberg for all data in Microsoft Fabric, enhancing data management capabilities. This update was announced on August 11, 2025.
-  - Integration of Apache Iceberg support in Microsoft OneLake.
-  - Microsoft Fabric uses Delta Lake as the standard table format.
-  - Enhancement aimed at unifying data management in a SaaS environment.
+- **[Hunting Living Secrets: Secret Validity Checks Arrive in GitHub Advanced Security for Azure DevOps](https://devblogs.microsoft.com/devops/hunting-living-secrets-secret-validity-checks-arrive-in-github-advanced-security-for-azure-devops/)** — If you’ve ever waded through a swamp of secret scanning alerts wondering, “Which of these are actually dangerous right now?” — this enhancement is for you. Secret validity checks in GitHub Advanced Security for Azure DevOps (and the standalone Secret Protection experience) add a high‑signal field to…
+- **[Public Preview: Auto agent upgrade for Azure Arc-enabled servers](https://techcommunity.microsoft.com/blog/azurearcblog/public-preview-auto-agent-upgrade-for-azure-arc-enabled-servers/4442556)** — Seamlessly keep the Azure Connected Machine agent up to date for the latest server management capabilities and fixes<br />Update Type: Preview, Services: Azure Arc, Categories:  200
+- **[Real-Time Security with Continuous Access Evaluation (CAE) comes to Azure DevOps](https://devblogs.microsoft.com/devops/real-time-security-with-continuous-access-evaluation-cae-comes-to-azure-devops/)** — We’re thrilled to announce that Continuous Access Evaluation (CAE) is now supported on Azure DevOps, bringing a new level of near real-time security enforcement to your development workflows.  What Is CAE? Continuous Access Evaluation (CAE) is a feature from Microsoft Entra ID that enables near real…
+- **[Private Pod Subnets in AKS Without Overlay Networking](https://techcommunity.microsoft.com/blog/appsonazureblog/private-pod-subnets-in-aks-without-overlay-networking/4442510)** — When deploying AKS clusters, a common concern is the amount of IP address space required. If you are deploying your AKS cluster into your corporate network, the size of the IP address space you can o...<br />Update Type: Announcement, Services: Kubernetes Service, Virtual Network, Categories:  200
+- **[Load data from network-protected Azure Storage accounts to Microsoft OneLake with AzCopy](https://blog.fabric.microsoft.com/en-US/blog/load-data-from-network-protected-azure-storage-accounts-to-microsoft-onelake-with-azcopy/)** — AzCopy is a powerful and performant tool for copying data between Azure Storage and Microsoft OneLake, and is the preferred tool for large-scale data movement due to its ease of use and built-in performance optimizations. AzCopy now supports copying data from firewall-enabled Azure Storage accounts…
+- **[OneLake costs simplified: lowering capacity utilization when accessing OneLake](https://blog.fabric.microsoft.com/en-US/blog/onelake-costs-simplified-lowering-capacity-utilization-when-accessing-onelake/)** — We’re thrilled to share a major update and simplification to OneLake’s capacity utilization model that will make it even easier to manage Fabric capacity and scale your data workloads. We are reducing the consumption rate of OneLake transactions via proxy to match the rate for transactions via redir…
+- **[Announcing Tenant-Level Service Health Alerts in Azure Monitor](<https://azure.microsoft.com/updates?id=499776>)** — Introducing Tenant-Level Service Health Alerts - a new preview capability in Azure Monitor that enables customers to receive proactive notifications about service health issues impacting their entire tenant, not just individual subscriptions. With this fe<br />Update Type: Preview, Services: Azure M…
+- **[Introducing Azure App Testing: Scalable End-to-end App Validation](<https://azure.microsoft.com/updates?id=500203>)** — Azure App Testing now enables developers and QA teams to run large-scale functional and performance tests to pinpoint issues in their applications, across frameworks like Playwright, JMeter, or Locust. It brings together two powerful testing capabilities—<br />Update Type: Preview, Services: Load Te…
+- **[General Available: App Service Inbound IPv6 Support](<https://azure.microsoft.com/updates?id=499998>)** — Inbound IPv6 support on public multi-tenant App Service is now generally available across all public Azure regions for multi-tenant apps on all Basic, Standard, and Premium SKUs, Functions Consumption, Functions Elastic Premium, and Logic Apps Standard.<br />Update Type: Announcement, Services: Logi…
+- **[Announcing GA of Bicep templates support for Microsoft Entra ID resources](https://devblogs.microsoft.com/identity/bicep-templates-for-microsoft-entra-id-resources-is-ga/)** — We’re thrilled to announce that Bicep templates for Microsoft Entra ID resources is generally available from July 29th, 2025. Bicep templates bring declarative infrastructure as code (IaC) capabilities to Microsoft Graph resources. This new capability will initially be available for core Microsoft E…
+- **[Upsert and Script Activity in Azure Data Factory and Azure Synapse Analytics for Azure Database for PostgreSQL](<https://azure.microsoft.com/updates?id=499748>)** — Announcing the general availability of the Upsert method and Script activity support in Azure Data Factory and Azure Synapse Analytics when using Azure Database for PostgreSQL. This enhancement enables you to perform efficient, scalable, and declarative d<br />Update Type: GA, Services: Synapse Anal…
+- **[Customer-managed keys for Fabric workspaces is now in Public Preview](https://blog.fabric.microsoft.com/en-US/blog/customer-managed-keys-for-fabric-workspaces-available-in-all-public-regions-now-preview/)** — We’re excited to share that customer-managed keys (CMK) for Microsoft Fabric workspaces are now available in public preview in all public regions! This expansion makes it easier for customers worldwide to meet compliance requirements and implement robust data protection strategies. Note: This featur…
+- **[Introducing support for Workspace Identity Authentication in Fabric Connectors](https://blog.fabric.microsoft.com/en-US/blog/announcing-support-for-workspace-identity-authentication-in-new-fabric-connectors-and-for-dataflow-gen2/)** — Co-author: Meenal Srivastva Managing secure, seamless access to data sources is a top priority for organizations using Microsoft Fabric. With workspace identity authentication, teams can simplify credential management, enhance security, and streamline data access across their enterprise. Workspace i…
+- **[How Microsoft OneLake seamlessly provides Apache Iceberg support for all Fabric Data](https://blog.fabric.microsoft.com/en-US/blog/how-to-access-your-microsoft-fabric-tables-in-apache-iceberg-format/)** — Co-authored with Kevin Liu, Apache Iceberg Committer and Principal Engineer at Microsoft.  Microsoft Fabric is a unified SaaS data and analytics platform designed for the era of AI. All workloads in Microsoft Fabric use Delta Lake as the standard, open-source table format. With Microsoft OneLake, Fa…
 
