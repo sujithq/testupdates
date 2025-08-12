@@ -1,18 +1,26 @@
 #!/usr/bin/env pwsh
-[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-
 param(
   # Where to write the markdown (your Hugo repo root)
-  [string]$RepoRoot = (Resolve-Path '.'),
+  # If you actually want the *script folder*, prefer $PSScriptRoot.
+  [string]$RepoRoot = (Resolve-Path -LiteralPath .).Path,
+  # or: [string]$RepoRoot = (Get-Location).Path
+  # or: [string]$RepoRoot = $PSScriptRoot  # if that's your intent
+
   # Section root (keep this OUT of your mainSections to avoid home pollution)
   [string]$ContentDir = 'content/updates',
+
   # Max items per source to keep the post readable
   [int]$MaxAzure = 20,
   [int]$MaxGitHub = 12,
   [int]$MaxTerraform = 8,
+
   # Which Terraform repos to watch (owner/repo)
-  [string[]]$TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
+  [string[]]$TerraformRepos = @(
+    'hashicorp/terraform',
+    'hashicorp/terraform-provider-azurerm'
+  )
 )
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
 # --- Config / env
 $ErrorActionPreference = 'Stop'
