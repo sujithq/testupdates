@@ -406,14 +406,16 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
   $safeDesc  = ($desc -replace '"','\"').Trim()
   $tagList = ($tags | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ', '
   $lines = @(
-    '---',
-  "title: '$safeTitle'",
-    "date: $now",
-    "lastmod: $now",
-    'draft: false',
-    "tags: [$tagList]",
-  "description: '$safeDesc'",
-    '---',''
+    '+++',
+  "title = '$safeTitle'",
+    "date = $now",
+    "lastmod = $now",
+    'draft = false',
+    "tags = [$tagList]",
+  "description = '$safeDesc'",
+  "[params]",
+  "    author = 'sujith'"
+    '+++',''
   )
   return $lines -join "`n"
 }
