@@ -96,11 +96,7 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
   Write-Warning "Frequencies value '$Frequencies' does not contain '='; did you forget a comma between Terraform repos? Use: -TerraformRepos 'org/a','org/b'"
 }
 
-Write-Host "!!!!!Test"
-$myArray = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
-foreach ($item in $TerraformRepos) {
-     Write-Host "!!!!Item: $item"
-}
+<# Removed temporary debug output for TerraformRepos enumeration #>
 
 # Validate pattern
 $invalid = @()
@@ -448,11 +444,9 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   if(-not $items -or $items.Count -eq 0){ return $null }
   $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($winStartUtc,$tz)
   $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($winEndUtc,$tz)
-  # Tags: primary = cadence (weekly|biweekly|monthly), secondary = source tag
   $cadenceTag = if($freq){ $freq } else { 'weekly' }
   $tagsArr = @('updates', $cadenceTag, $tag) | Select-Object -Unique
 
-  # Determine dynamic title & slug
   switch($freq){
     'biweekly' {
       $w1 = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
@@ -482,7 +476,6 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   }
 
   $desc  = "Highlights from $typeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
-  $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
   $body = Convert-ItemsToMarkdown -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
 
   $targetDir = Join-Path $RepoRoot $ContentDir
@@ -490,8 +483,38 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   $folder = Join-Path $targetDir $folderName
   New-Item -ItemType Directory -Force -Path $folder | Out-Null
   $file = Join-Path $folder 'index.md'
-  Log "Writing post: $file"
-  Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+
+  $nowIso = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+  if(Test-Path $file){
+    # Update lastmod only; preserve original front matter (title/date/tags/description/etc.)
+    $existingLines = Get-Content -Path $file
+    $openIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -First 1).LineNumber - 1
+    $closeIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -Skip 1 -First 1).LineNumber - 1
+    if($openIdx -ge 0 -and $closeIdx -gt $openIdx){
+      for($i = $openIdx+1; $i -lt $closeIdx; $i++){
+        if($existingLines[$i] -match '^\s*lastmod\s*='){ $existingLines[$i] = "lastmod = $nowIso" }
+      }
+      if(-not ($existingLines[$openIdx+1..($closeIdx-1)] -match '^\s*lastmod\s*=')){
+        # Insert lastmod before closing delimiter
+        $existingLines = @($existingLines[0..($closeIdx-1)] + @("lastmod = $nowIso") + $existingLines[$closeIdx..($existingLines.Count-1)])
+        # Recompute closeIdx not needed further
+      }
+      $frontMatter = $existingLines[0..$closeIdx]
+      $newContent = ($frontMatter + '' + $body.TrimEnd())
+      Log "Updating existing post (lastmod + body): $file"
+      Set-Content -Path $file -Value $newContent -Encoding UTF8
+    } else {
+      # Fallback: regenerate full front matter if delimiters not found
+      $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
+      Log "Regenerating malformed front matter: $file"
+      Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+    }
+  } else {
+    $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
+    Log "Writing new post: $file"
+    Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+  }
   return $file
 }
 
