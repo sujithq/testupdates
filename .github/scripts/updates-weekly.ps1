@@ -259,19 +259,19 @@ function Get-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
 function Get-TerraformReleases {
   Log 'Fetch: Terraform releases'
   # Robust logging: handle case where -TerraformRepos was passed without values (becomes $true)
-  $repoArray = @()
-  if($TerraformRepos -is [System.Array]){ $repoArray = $TerraformRepos }
-  elseif($TerraformRepos -eq $true){ $repoArray = @() } # switch misuse
-  elseif($TerraformRepos){ $repoArray = @([string]$TerraformRepos) }
-  $repoArray = $repoArray | Where-Object { $_ -and ($_ -is [string]) }
-  $joinedRepos = if($repoArray.Count -gt 0){ $repoArray -join ', ' } else { '(none)' }
-  Log "Terraform repositories: $joinedRepos"
-  foreach($rr in $repoArray){ 
+  # $repoArray = @()
+  # if($TerraformRepos -is [System.Array]){ $repoArray = $TerraformRepos }
+  # elseif($TerraformRepos -eq $true){ $repoArray = @() } # switch misuse
+  # elseif($TerraformRepos){ $repoArray = @([string]$TerraformRepos) }
+  # $repoArray = $repoArray | Where-Object { $_ -and ($_ -is [string]) }
+  # $joinedRepos = if($repoArray.Count -gt 0){ $repoArray -join ', ' } else { '(none)' }
+  # Log "Terraform repositories: $joinedRepos"
+  foreach($rr in $TerraformRepos){ 
     if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
   $items = @()
   $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0; $totalSkippedNoDate = 0
   $swTf = [System.Diagnostics.Stopwatch]::StartNew()
-  foreach($full in $repoArray){
+  foreach($full in $TerraformRepos){
     Log "Repo: $full"
     $parts = $full.Split('/')
     if($parts.Count -ne 2){ continue }
