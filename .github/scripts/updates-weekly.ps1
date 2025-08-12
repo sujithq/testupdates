@@ -81,18 +81,26 @@ foreach($pair in ($Frequencies -split ',')){
   $FrequencyMap[$kv[0]] = $kv[1].ToLowerInvariant()
 }
 
-# # --- Normalize TerraformRepos (handle accidental boolean binding like -TerraformRepos:$true)
-# if($TerraformRepos -is [bool]){
-#   Log "TerraformRepos received as boolean '$TerraformRepos'; reverting to defaults"
-#   $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-# } elseif($TerraformRepos -isnot [System.Array]){
-#   if($TerraformRepos){ $TerraformRepos = @([string]$TerraformRepos) } else {
-#     $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-#   }
-# }
-# if(-not $TerraformRepos -or $TerraformRepos.Count -eq 0){
-#   $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-# }
+# --- TerraformRepos strict validation & logging
+if($TerraformRepos -is [bool]){
+  throw "TerraformRepos was bound as boolean ($TerraformRepos). Pass one or more 'owner/repo' strings: -TerraformRepos 'hashicorp/terraform','hashicorp/terraform-provider-azurerm'"
+}
+if(-not $TerraformRepos){
+  throw "TerraformRepos is empty. Provide at least one 'owner/repo' string."
+}
+# Coerce single scalar to array (PowerShell already does for [string[]], but be explicit)
+if($TerraformRepos -isnot [System.Array]){ $TerraformRepos = @([string]$TerraformRepos) }
+
+# Detect common invocation mistake where second repo got swallowed as Frequencies (no '=' present)
+if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='){
+  Write-Warning "Frequencies value '$Frequencies' does not contain '='; did you forget a comma between Terraform repos? Use: -TerraformRepos 'org/a','org/b'"
+}
+
+# Validate pattern
+$invalid = @()
+foreach($tr in $TerraformRepos){ if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr } }
+if($invalid.Count -gt 0){ throw "Invalid TerraformRepos entries (expect owner/repo): $($invalid -join ', ')" }
+Log ("TerraformRepos ({0}): {1}" -f $TerraformRepos.Count, ($TerraformRepos -join ', '))
 
 # Per-source window overrides
 $AzureWindowStartUtc = $weekStartUtc; $AzureWindowEndUtc = $weekEndUtc
@@ -269,15 +277,14 @@ function Get-TerraformReleases {
   foreach($rr in $TerraformRepos){ 
     if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
   $items = @()
-  $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0; $totalSkippedNoDate = 0
+  $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0
   $swTf = [System.Diagnostics.Stopwatch]::StartNew()
   foreach($full in $TerraformRepos){
-    Log "Repo: $full"
     $parts = $full.Split('/')
     if($parts.Count -ne 2){ continue }
     $owner=$parts[0]; $repo=$parts[1]
     Log "Repo: $owner/$repo (window $TerraformWindowStartUtc -> $TerraformWindowEndUtc)"
-  $rels = Get-GitHubReleases -owner $owner -repo $repo -limit 8
+    $rels = Get-GitHubReleases -owner $owner -repo $repo -limit 8
     if(-not $rels -or $rels.Count -eq 0){ Log "  No releases returned"; continue }
     Log ("  Releases returned: {0}" -f $rels.Count)
     foreach($r in $rels){
