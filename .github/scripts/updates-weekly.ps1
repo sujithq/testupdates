@@ -18,7 +18,10 @@ param(
   [string[]]$TerraformRepos = @(
     'hashicorp/terraform',
     'hashicorp/terraform-provider-azurerm'
-  )
+  ),
+  # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
+  # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
+  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=weekly'
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -296,6 +299,24 @@ $map = @(
   @{ Name='Terraform'; Slug='terraform-weekly'; Tag='terraform' }
 )
 
+# Parse frequency map
+$FrequencyMap = @{}
+foreach($pair in ($Frequencies -split ',')){
+  $p = $pair.Trim(); if(-not $p){ continue }
+  $kv = $p -split '='; if($kv.Count -ne 2){ continue }
+  $FrequencyMap[$kv[0]] = $kv[1].ToLowerInvariant()
+}
+
+function Should-EmitSource([string]$sourceName){
+  $freq = if($FrequencyMap.ContainsKey($sourceName)){ $FrequencyMap[$sourceName] } else { 'weekly' }
+  switch($freq){
+    'weekly'   { return $true }
+    'biweekly' { return (($isoWeek % 2) -eq 0) }  # emit on even ISO weeks only
+    'monthly'  { return ($weekStartLocal.Day -le 7) } # emit only during first week of month
+    default    { return $true }
+  }
+}
+
 # Build simple name -> items map (avoid nesting GroupInfo objects)
 $groups = @{}
 foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
@@ -303,9 +324,13 @@ foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
 foreach($m in $map){
   $name = $m.Name
   if($groups.ContainsKey($name)){
-    $itemsForSource = $groups[$name]
-    $path = Write-PerTypePost -typeName $name -slugBase $m.Slug -items $itemsForSource -tag $m.Tag
-    if($path){ $written += $path }
+    if(Should-EmitSource $name){
+      $itemsForSource = $groups[$name]
+      $path = Write-PerTypePost -typeName $name -slugBase $m.Slug -items $itemsForSource -tag $m.Tag
+      if($path){ $written += $path }
+    } else {
+      Log "Skipping $name this week due to frequency cadence"
+    }
   }
 }
 
