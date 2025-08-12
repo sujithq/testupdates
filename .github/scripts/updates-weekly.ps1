@@ -17,10 +17,10 @@ param(
 
   # Which Terraform repos to watch (owner/repo)
   # [string[]]$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm"),
-  
+
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
-  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=weekly'
+  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=monthly'
   ,
   # Time window mode: 'week' (Mon-Sun current week) or 'rolling'
   [ValidateSet('week','rolling')][string]$WindowType = 'week',
