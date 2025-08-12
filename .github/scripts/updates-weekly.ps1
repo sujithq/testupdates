@@ -98,7 +98,11 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
 
 # Validate pattern
 $invalid = @()
-foreach($tr in $TerraformRepos){ if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr } }
+foreach($tr in $TerraformRepos)
+{ 
+  Log "Validating Terraform repo: $tr"
+  if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr } 
+}
 if($invalid.Count -gt 0){ throw "Invalid TerraformRepos entries (expect owner/repo): $($invalid -join ', ')" }
 Log ("TerraformRepos ({0}): {1}" -f $TerraformRepos.Count, ($TerraformRepos -join ', '))
 
