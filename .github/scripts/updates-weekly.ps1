@@ -209,17 +209,20 @@ $bySource = $summaries | Group-Object source | Sort-Object Name
 # --- Renderers
 function New-FrontMatter($title,$desc,$tags){
   $now = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-  @(
-    '---',
-    'title: ' + '"' + $title + '"',
-    'date: ' + $now,
-    'lastmod: ' + $now,
-    'draft: false',
-    ('tags: [' + ($tags -join ',') + ']'),
-    ('description: ' + '"' + ($desc -replace '"','\"') + '"'),
-    '---',''
-  ) -join "`n"
-}
+    $safeTitle = ($title -replace '"','\"').Trim()
+    $safeDesc  = ($desc -replace '"','\"').Trim()
+    $tagList = ($tags | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ', '
+    $fm = @"---
+  title: "$safeTitle"
+  date: $now
+  lastmod: $now
+  draft: false
+  tags: [$tagList]
+  description: "$safeDesc"
+  ---
+  "@
+    return $fm + "`n"
+  }
 
 function Render-Body($items){
   $lines = @()
@@ -238,7 +241,7 @@ function Write-PerTypePost($typeName,$slugBase,$items,$tag){
   if(-not $items -or $items.Count -eq 0){ return $null }
   $title = "$typeName Weekly – $yearForWeek Week $isoWeek"
   $desc  = "Highlights from $typeName between $($weekStartLocal.ToString('yyyy-MM-dd')) and $($weekEndLocal.ToString('yyyy-MM-dd'))."
-  $tags  = @('"weekly"', '"' + $tag + '"')
+    $tags  = @('weekly', $tag)
   $fm = New-FrontMatter -title $title -desc $desc -tags $tags
   $body = Render-Body -items $items
 
