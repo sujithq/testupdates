@@ -207,24 +207,23 @@ foreach($i in $all){ if(-not $i){ continue }; try { $summaries += (Summarize-Ite
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
-function New-FrontMatter($title,$desc,$tags){
+function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
   $now = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-    $safeTitle = ($title -replace '"','\"').Trim()
-    $safeDesc  = ($desc -replace '"','\"').Trim()
-    $tagList = ($tags | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ', '
-    $lines = @(
-      '---',
-      "title: \"$safeTitle\"",
-      "date: $now",
-      "lastmod: $now",
-      'draft: false',
-      "tags: [$tagList]",
-      "description: \"$safeDesc\"",
-      '---',''
-    )
-    return $lines -join "`n"
-    return $fm + "`n"
-  }
+  $safeTitle = ($title -replace '"','\"').Trim()
+  $safeDesc  = ($desc -replace '"','\"').Trim()
+  $tagList = ($tags | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ', '
+  $lines = @(
+    '---',
+    "title: \"$safeTitle\"",
+    "date: $now",
+    "lastmod: $now",
+    'draft: false',
+    "tags: [$tagList]",
+    "description: \"$safeDesc\"",
+    '---',''
+  )
+  return $lines -join "`n"
+}
 
 function Render-Body($items){
   $lines = @()
