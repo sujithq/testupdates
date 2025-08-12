@@ -266,11 +266,15 @@ $map = @(
   @{ Name='Terraform'; Slug='terraform-weekly'; Tag='terraform' }
 )
 
-$groups = $bySource | Group-Object Name -AsHashTable -AsString
+# Build simple name -> items map (avoid nesting GroupInfo objects)
+$groups = @{}
+foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
+
 foreach($m in $map){
   $name = $m.Name
   if($groups.ContainsKey($name)){
-    $path = Write-PerTypePost -typeName $name -slugBase $m.Slug -items $groups[$name] -tag $m.Tag
+    $itemsForSource = $groups[$name]
+    $path = Write-PerTypePost -typeName $name -slugBase $m.Slug -items $itemsForSource -tag $m.Tag
     if($path){ $written += $path }
   }
 }
