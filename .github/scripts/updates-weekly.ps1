@@ -81,18 +81,18 @@ foreach($pair in ($Frequencies -split ',')){
   $FrequencyMap[$kv[0]] = $kv[1].ToLowerInvariant()
 }
 
-# --- Normalize TerraformRepos (handle accidental boolean binding like -TerraformRepos:$true)
-if($TerraformRepos -is [bool]){
-  Log "TerraformRepos received as boolean '$TerraformRepos'; reverting to defaults"
-  $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-} elseif($TerraformRepos -isnot [System.Array]){
-  if($TerraformRepos){ $TerraformRepos = @([string]$TerraformRepos) } else {
-    $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-  }
-}
-if(-not $TerraformRepos -or $TerraformRepos.Count -eq 0){
-  $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
-}
+# # --- Normalize TerraformRepos (handle accidental boolean binding like -TerraformRepos:$true)
+# if($TerraformRepos -is [bool]){
+#   Log "TerraformRepos received as boolean '$TerraformRepos'; reverting to defaults"
+#   $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
+# } elseif($TerraformRepos -isnot [System.Array]){
+#   if($TerraformRepos){ $TerraformRepos = @([string]$TerraformRepos) } else {
+#     $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
+#   }
+# }
+# if(-not $TerraformRepos -or $TerraformRepos.Count -eq 0){
+#   $TerraformRepos = @('hashicorp/terraform','hashicorp/terraform-provider-azurerm')
+# }
 
 # Per-source window overrides
 $AzureWindowStartUtc = $weekStartUtc; $AzureWindowEndUtc = $weekEndUtc
