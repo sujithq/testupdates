@@ -404,7 +404,15 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
   $now = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
   $safeTitle = ($title -replace '"','\"').Trim()
   $safeDesc  = ($desc -replace '"','\"').Trim()
-  $tagList = ($tags | Where-Object { $_ -and $_.Trim() -ne '' } | ForEach-Object { $_.Trim() }) -join ', '
+  # Build list of single-quoted, trimmed tags
+  $tagList = ($tags |
+    Where-Object { $_ -and $_.Trim() -ne '' } |
+    ForEach-Object {
+      $t = $_.Trim()
+      # Escape any internal single quote by doubling it (TOML single-quoted strings use literal form; doubling is safest here)
+      $t = $t -replace "'", "''"
+      "'$t'"
+    }) -join ', '
   $lines = @(
     '+++',
   "title = '$safeTitle'",
