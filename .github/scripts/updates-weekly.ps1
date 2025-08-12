@@ -1,4 +1,5 @@
 #!/usr/bin/env pwsh
+[CmdletBinding()]
 param(
   # Where to write the markdown (your Hugo repo root)
   # If you actually want the *script folder*, prefer $PSScriptRoot.
@@ -203,21 +204,27 @@ function Get-GitHubChangelog {
 
 function Get-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
   $uri = "https://api.github.com/repos/$owner/$repo/releases?per_page=$limit"
+  Write-Verbose "Releases API call: $uri"
   try { return Invoke-RestMethod -Uri $uri -Headers $HeadersGitHub -Method GET }
   catch { Write-Warning "Releases fetch failed for $owner/$repo $_"; return @() }
 }
 function Get-TerraformReleases {
   Log 'Fetch: Terraform releases'
+  Write-Verbose ("Terraform repositories: {0}" -f ($TerraformRepos -join ', '))
   $items = @()
   foreach($full in $TerraformRepos){
     $parts = $full.Split('/')
     if($parts.Count -ne 2){ continue }
     $owner=$parts[0]; $repo=$parts[1]
+    Write-Verbose "Repo: $owner/$repo (window $TerraformWindowStartUtc -> $TerraformWindowEndUtc)"
   $rels = Get-GitHubReleases -owner $owner -repo $repo -limit 8
     foreach($r in $rels){
       if(-not $r.published_at){ continue }
       $pub = [datetime]::Parse($r.published_at).ToUniversalTime()
-  if($pub -lt $TerraformWindowStartUtc -or $pub -gt $TerraformWindowEndUtc){ continue }
+      if($pub -lt $TerraformWindowStartUtc -or $pub -gt $TerraformWindowEndUtc){
+        Write-Verbose "Skip release $($r.tag_name) ($pub) outside window"
+        continue
+      }
       $body = [string]($r.body ?? '')
       $items += [pscustomobject]@{
         source = 'Terraform'
@@ -226,6 +233,7 @@ function Get-TerraformReleases {
         publishedAt = $pub
         raw    = Trunc($body, 4000)
       }
+      Write-Verbose "Include release $($r.tag_name) ($pub)"
     }
   }
   return $items | Sort-Object publishedAt -Descending | Select-Object -First $MaxTerraform
