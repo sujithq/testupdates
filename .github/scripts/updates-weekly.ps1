@@ -232,6 +232,8 @@ function Render-Body($items){
   $lines += ''
   # Avoid MD036; no trailing explicit newline to prevent MD012
   $lines += "**Window:** $($weekStartLocal.ToString('yyyy-MM-dd')) → $($weekEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)"
+  # Blank line before list (MD032)
+  $lines += ''
   foreach($x in ($items | Sort-Object date -Descending)){
     $bul = ToBulletMd $x.bullets
     $line = "- **[$([string](MdEscape $x.title))]($($x.url))** — $([string](MdEscape $x.summary))"
