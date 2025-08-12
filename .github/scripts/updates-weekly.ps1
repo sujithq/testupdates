@@ -188,7 +188,7 @@ $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consol
 
 function Get-AzureUpdates {
   Log 'Fetch: Azure updates (Azure Charts RSS)'
-  if($ShowApiUrls){ Log "URL: $AzureRss" } else { Write-Verbose "URL: $AzureRss" }
+  if($ShowApiUrls){ Log "URL: $AzureRss" } else { Log "URL: $AzureRss" }
   try {
     $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
     if(-not $resp.Content){ throw 'Empty response body' }
@@ -214,7 +214,7 @@ function Get-AzureUpdates {
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
 function Get-GitHubChangelog {
   Log 'Fetch: GitHub Changelog RSS'
-  if($ShowApiUrls){ Log "URL: $GitHubChangelogRss" } else { Write-Verbose "URL: $GitHubChangelogRss" }
+  if($ShowApiUrls){ Log "URL: $GitHubChangelogRss" } else { Log "URL: $GitHubChangelogRss" }
   try {
     $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
     if(-not $resp.Content){ throw 'Empty response body' }
@@ -239,25 +239,31 @@ function Get-GitHubChangelog {
 
 function Get-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
   $uri = "https://api.github.com/repos/$owner/$repo/releases?per_page=$limit"
-  if($ShowApiUrls){ Log "API: $uri" } else { Write-Verbose "API: $uri" }
+  if($ShowApiUrls){ Log "API: $uri" } else { Log "API: $uri" }
   try { return Invoke-RestMethod -Uri $uri -Headers $HeadersGitHub -Method GET }
   catch { Write-Warning "Releases fetch failed for $owner/$repo $_"; return @() }
 }
 function Get-TerraformReleases {
   Log 'Fetch: Terraform releases'
-  Write-Verbose ("Terraform repositories: {0}" -f ($TerraformRepos -join ', '))
+  Log ("Terraform repositories: {0}" -f ($TerraformRepos -join ', '))
   $items = @()
+  $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0; $totalSkippedNoDate = 0
+  $swTf = [System.Diagnostics.Stopwatch]::StartNew()
   foreach($full in $TerraformRepos){
+    Log "Repo: $full"
     $parts = $full.Split('/')
     if($parts.Count -ne 2){ continue }
     $owner=$parts[0]; $repo=$parts[1]
-    Write-Verbose "Repo: $owner/$repo (window $TerraformWindowStartUtc -> $TerraformWindowEndUtc)"
+    Log "Repo: $owner/$repo (window $TerraformWindowStartUtc -> $TerraformWindowEndUtc)"
   $rels = Get-GitHubReleases -owner $owner -repo $repo -limit 8
+    if(-not $rels -or $rels.Count -eq 0){ Log "  No releases returned"; continue }
+    Log ("  Releases returned: {0}" -f $rels.Count)
     foreach($r in $rels){
       if(-not $r.published_at){ continue }
       $pub = [datetime]::Parse($r.published_at).ToUniversalTime()
       if($pub -lt $TerraformWindowStartUtc -or $pub -gt $TerraformWindowEndUtc){
-        Write-Verbose "Skip release $($r.tag_name) ($pub) outside window"
+        Log "Skip release $($r.tag_name) ($pub) outside window"
+        $totalSkippedWindow++
         continue
       }
       $body = [string]($r.body ?? '')
@@ -268,10 +274,17 @@ function Get-TerraformReleases {
         publishedAt = $pub
         raw    = Trunc($body, 4000)
       }
-      Write-Verbose "Include release $($r.tag_name) ($pub)"
+      Log "Include release $($r.tag_name) ($pub)"
+      $totalIncluded++
+      $totalFetched++
     }
   }
-  return $items | Sort-Object publishedAt -Descending | Select-Object -First $MaxTerraform
+  $swTf.Stop()
+  $items = $items | Sort-Object publishedAt -Descending
+  $beforeCap = $items.Count
+  $capped = $items | Select-Object -First $MaxTerraform
+  Log ("Terraform summary: included={0} (pre-cap {1}), skippedWindow={2}, elapsed={3:n1}s" -f $capped.Count,$beforeCap,$totalSkippedWindow,$swTf.Elapsed.TotalSeconds)
+  return $capped
 }
 
 # --- Collect and summarize
@@ -326,7 +339,7 @@ if($DisableSummaries){
     $swItem = [System.Diagnostics.Stopwatch]::StartNew()
     $cacheKey = ($i.source + '|' + $i.title + '|' + $i.publishedAt.ToString('u'))
     if($SummaryCache.ContainsKey($cacheKey)){
-      Write-Verbose "    cache hit"
+      Log "    cache hit"
       $summaries += $SummaryCache[$cacheKey]
       $swItem.Stop(); continue
     }
@@ -341,7 +354,7 @@ if($DisableSummaries){
       $summaries += $fallback
       $SummaryCache[$cacheKey] = $fallback
     }
-    finally { $swItem.Stop(); Write-Verbose ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds)) }
+    finally { $swItem.Stop(); Log ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds)) }
   }
   Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
 }
