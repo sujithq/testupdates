@@ -228,7 +228,8 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
 function Render-Body($items){
   $lines = @()
   $lines += "## This week at a glance"
-  $lines += "_Window: $($weekStartLocal.ToString('yyyy-MM-dd')) → $($weekEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)_`n"
+  # Avoid markdownlint MD036 (no emphasis as heading) by using a bold label instead of full-line italics
+  $lines += "**Window:** $($weekStartLocal.ToString('yyyy-MM-dd')) → $($weekEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)`n"
   foreach($x in ($items | Sort-Object date -Descending)){
     $bul = ToBulletMd $x.bullets
     $line = "- **[$([string](MdEscape $x.title))]($($x.url))** — $([string](MdEscape $x.summary))"
