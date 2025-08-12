@@ -28,6 +28,9 @@ param(
   [ValidateSet('week','rolling')][string]$WindowType = 'week',
   # When WindowType=rolling, number of days back (exclusive of future) to include
   [int]$RollingDays = 7
+  ,
+  # Skip AI summarization (for faster debug); basic title-only summaries will be used
+  [switch]$DisableSummaries
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -275,7 +278,24 @@ RAW:\n$([string]$item.raw)
 }
 
 $summaries = @()
-foreach($i in $all){ if(-not $i){ continue }; try { $summaries += (Get-ItemSummary $i) } catch { Write-Warning "Summarize failed for item: $($_.Exception.Message)" } }
+$swSumm = [System.Diagnostics.Stopwatch]::StartNew()
+if($DisableSummaries){
+  Log "Summaries disabled (-DisableSummaries); using raw titles only"
+  foreach($i in $all){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
+} else {
+  Log ("Summarizing {0} items" -f $all.Count)
+  for($idx=0; $idx -lt $all.Count; $idx++){
+    $i = $all[$idx]
+    if(-not $i){ continue }
+    $label = Trunc $i.title 70
+    Log ("  [{0}/{1}] {2} :: {3}" -f ($idx+1), $all.Count, $i.source, $label)
+    $swItem = [System.Diagnostics.Stopwatch]::StartNew()
+    try { $summaries += (Get-ItemSummary $i) }
+    catch { Write-Warning "Summarize failed for item ($label): $($_.Exception.Message)" }
+    finally { $swItem.Stop(); Write-Verbose ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds)) }
+  }
+  Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
+}
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
@@ -407,4 +427,6 @@ foreach($m in $map){
   }
 }
 
+$totalElapsed = (Get-Date) - $nowUtc
+Log ("Done. Elapsed ~{0:n1}s. Files written: {1}" -f $totalElapsed.TotalSeconds, $written.Count)
 Write-Host "Written files:`n - " + ($written -join "`n - ")
