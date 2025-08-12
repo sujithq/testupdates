@@ -30,7 +30,14 @@ param(
   [int]$RollingDays = 7
   ,
   # Skip AI summarization (for faster debug); basic title-only summaries will be used
-  [switch]$DisableSummaries
+  [switch]$DisableSummaries,
+  # Max retry attempts for model summarization on transient errors (e.g. 429)
+  [int]$MaxSummaryRetries = 4,
+  # Base seconds for exponential backoff (sleep = base * 2^(n-1) + jitter)
+  [int]$SummaryRetryBaseSeconds = 2
+  ,
+  # Always log external feed/API URLs (not only via -Verbose)
+  [switch]$ShowApiUrls
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -99,7 +106,9 @@ function Invoke-GitHubModelChat {
     [Parameter(Mandatory)] [string]$Prompt,
     [string]$Model = 'openai/gpt-4o-mini',
     [decimal]$Temperature = 0.2,
-    [int]$MaxTokens = 350
+    [int]$MaxTokens = 350,
+    [int]$MaxAttempts = $MaxSummaryRetries,
+    [int]$BaseDelaySeconds = $SummaryRetryBaseSeconds
   )
   $body = @{
     model = $Model
@@ -124,9 +133,30 @@ function Invoke-GitHubModelChat {
     )
   } | ConvertTo-Json -Depth 8
 
-  $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body
-  $json = $res.choices[0].message.content
-  try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
+  $attempt = 0
+  $lastErr = $null
+  while($attempt -lt [math]::Max(1,$MaxAttempts)){
+    $attempt++
+    try {
+      $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
+      $json = $res.choices[0].message.content
+      try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
+    } catch {
+      $lastErr = $_
+      $status = $null
+      try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
+      $isTransient = $false
+      if($status -eq 429 -or $status -ge 500){ $isTransient = $true }
+      if(-not $isTransient -or $attempt -ge $MaxAttempts){ break }
+      $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
+      # Jitter 0-400ms
+      $jitterMs = Get-Random -Minimum 0 -Maximum 400
+      Log ("  Model 429/5xx attempt {0}/{1}; waiting {2}s (+{3}ms)" -f $attempt,$MaxAttempts,[int]$delay,$jitterMs)
+      Start-Sleep -Seconds $delay
+      Start-Sleep -Milliseconds $jitterMs
+    }
+  }
+  throw $lastErr
 }
 
 # --- Utilities
@@ -158,6 +188,7 @@ $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consol
 
 function Get-AzureUpdates {
   Log 'Fetch: Azure updates (Azure Charts RSS)'
+  if($ShowApiUrls){ Log "URL: $AzureRss" } else { Write-Verbose "URL: $AzureRss" }
   try {
     $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
     if(-not $resp.Content){ throw 'Empty response body' }
@@ -183,6 +214,7 @@ function Get-AzureUpdates {
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
 function Get-GitHubChangelog {
   Log 'Fetch: GitHub Changelog RSS'
+  if($ShowApiUrls){ Log "URL: $GitHubChangelogRss" } else { Write-Verbose "URL: $GitHubChangelogRss" }
   try {
     $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
     if(-not $resp.Content){ throw 'Empty response body' }
@@ -207,7 +239,7 @@ function Get-GitHubChangelog {
 
 function Get-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
   $uri = "https://api.github.com/repos/$owner/$repo/releases?per_page=$limit"
-  Write-Verbose "Releases API call: $uri"
+  if($ShowApiUrls){ Log "API: $uri" } else { Write-Verbose "API: $uri" }
   try { return Invoke-RestMethod -Uri $uri -Headers $HeadersGitHub -Method GET }
   catch { Write-Warning "Releases fetch failed for $owner/$repo $_"; return @() }
 }
@@ -279,6 +311,8 @@ RAW:\n$([string]$item.raw)
 
 $summaries = @()
 $swSumm = [System.Diagnostics.Stopwatch]::StartNew()
+if($MaxSummaryRetries -lt 1){ $MaxSummaryRetries = 1 }
+$SummaryCache = @{}
 if($DisableSummaries){
   Log "Summaries disabled (-DisableSummaries); using raw titles only"
   foreach($i in $all){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
@@ -290,8 +324,23 @@ if($DisableSummaries){
     $label = Trunc $i.title 70
     Log ("  [{0}/{1}] {2} :: {3}" -f ($idx+1), $all.Count, $i.source, $label)
     $swItem = [System.Diagnostics.Stopwatch]::StartNew()
-    try { $summaries += (Get-ItemSummary $i) }
-    catch { Write-Warning "Summarize failed for item ($label): $($_.Exception.Message)" }
+    $cacheKey = ($i.source + '|' + $i.title + '|' + $i.publishedAt.ToString('u'))
+    if($SummaryCache.ContainsKey($cacheKey)){
+      Write-Verbose "    cache hit"
+      $summaries += $SummaryCache[$cacheKey]
+      $swItem.Stop(); continue
+    }
+    try { 
+      $sum = Get-ItemSummary $i
+      $summaries += $sum
+      $SummaryCache[$cacheKey] = $sum
+    }
+    catch {
+      Write-Warning "Summarize failed for item ($label): $($_.Exception.Message) -- fallback to title/raw trunc"
+      $fallback = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() }
+      $summaries += $fallback
+      $SummaryCache[$cacheKey] = $fallback
+    }
     finally { $swItem.Stop(); Write-Verbose ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds)) }
   }
   Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
