@@ -96,12 +96,16 @@ $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'  # Azure Charts consol
 function Fetch-AzureUpdates {
   Log 'Fetch: Azure updates (Azure Charts RSS)'
   try {
-    [xml]$rss = Invoke-RestMethod -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' }
-    $items = @()
-    foreach($i in $rss.rss.channel.item){
-      $pub = Get-Date $i.pubDate
+    $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
+    if(-not $resp.Content){ throw 'Empty response body' }
+    try { [xml]$rss = $resp.Content } catch { throw "RSS XML parse failed: $($_.Exception.Message)" }
+    if(-not $rss.rss.channel.item){ return @() }
+    $items = foreach($i in $rss.rss.channel.item){
+      if(-not $i.pubDate){ continue }
+      $pub = Get-Date $i.pubDate -ErrorAction SilentlyContinue
+      if(-not $pub){ continue }
       if($pub -lt $weekStartUtc -or $pub -gt $weekEndUtc){ continue }
-      $items += [pscustomobject]@{
+      [pscustomobject]@{
         source = 'Azure'
         title = [string]$i.title
         url   = [string]$i.link
@@ -109,20 +113,24 @@ function Fetch-AzureUpdates {
         raw   = [string]$i.description
       }
     }
-    return $items | Sort-Object publishedAt -Descending | Select-Object -First $MaxAzure
-  } catch { Write-Warning "Azure RSS failed: $_"; return @() }
+    return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxAzure
+  } catch { Write-Warning "Azure RSS failed: $($_.Exception.Message)"; return @() }
 }
 
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
 function Fetch-GitHubChangelog {
   Log 'Fetch: GitHub Changelog RSS'
   try {
-    [xml]$rss = Invoke-RestMethod -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' }
-    $items = @()
-    foreach($i in $rss.rss.channel.item){
-      $pub = Get-Date $i.pubDate
+    $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
+    if(-not $resp.Content){ throw 'Empty response body' }
+    try { [xml]$rss = $resp.Content } catch { throw "RSS XML parse failed: $($_.Exception.Message)" }
+    if(-not $rss.rss.channel.item){ return @() }
+    $items = foreach($i in $rss.rss.channel.item){
+      if(-not $i.pubDate){ continue }
+      $pub = Get-Date $i.pubDate -ErrorAction SilentlyContinue
+      if(-not $pub){ continue }
       if($pub -lt $weekStartUtc -or $pub -gt $weekEndUtc){ continue }
-      $items += [pscustomobject]@{
+      [pscustomobject]@{
         source = 'GitHub'
         title  = [string]$i.title
         url    = [string]$i.link
@@ -130,8 +138,8 @@ function Fetch-GitHubChangelog {
         raw    = Trunc([string]$i.'content:encoded', 2000)
       }
     }
-    return $items | Sort-Object publishedAt -Descending | Select-Object -First $MaxGitHub
-  } catch { Write-Warning "GitHub Changelog RSS failed: $_"; return @() }
+    return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxGitHub
+  } catch { Write-Warning "GitHub Changelog RSS failed: $($_.Exception.Message)"; return @() }
 }
 
 function Fetch-GitHubReleases([string]$owner,[string]$repo,[int]$limit=8){
@@ -195,7 +203,7 @@ RAW:\n$([string]$item.raw)
 }
 
 $summaries = @()
-foreach($i in $all){ $summaries += (Summarize-Item $i) }
+foreach($i in $all){ if(-not $i){ continue }; try { $summaries += (Summarize-Item $i) } catch { Write-Warning "Summarize failed for item: $($_.Exception.Message)" } }
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
