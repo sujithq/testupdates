@@ -11,12 +11,9 @@ param(
   [string]$ContentDir = 'content/updates',
 
   # Max items per source to keep the post readable
-  # [int]$MaxAzure = 20,
-  # [int]$MaxGitHub = 12,
-  # [int]$MaxTerraform = 8,
-  [ValidateRange(0,200)][int]$MaxAzure = 1,
-  [ValidateRange(0,200)][int]$MaxGitHub = 1,
-  [ValidateRange(0,200)][int]$MaxTerraform = 1,
+  [ValidateRange(0,200)][int]$MaxAzure = 20,
+  [ValidateRange(0,200)][int]$MaxGitHub = 12,
+  [ValidateRange(0,200)][int]$MaxTerraform = 8,
 
   # Which Terraform repos to watch (owner/repo)
   # [string[]]$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm"),
@@ -479,19 +476,41 @@ function Summarize-Items {
   )
   $summaries = @(); $swSumm = [System.Diagnostics.Stopwatch]::StartNew(); if($MaxSummaryRetries -lt 1){ $MaxSummaryRetries = 1 }
   $SummaryCache = @{}
+  # Build model pool (base models + their -mini counterparts) per spec
+  $baseModels = @('openai/gpt-4.1','openai/gpt-4o','openai/gpt-5','openai/o1','openai/o3')
+  $modelPool = @()
+  foreach($b in $baseModels){
+    $modelPool += $b
+    $mini = "$b-mini"
+    $modelPool += $mini
+  }
+  $ModelStatus = [ordered]@{}
+  foreach($m in $modelPool){ $ModelStatus[$m] = [pscustomobject]@{ model=$m; had429=$false; failures=0; successes=0; active=$true } }
+  $allModelsDeactivated = $false
   if($DisableSummaries){
     Log 'Summaries disabled (-DisableSummaries); using raw titles only'
     foreach($i in $AllItems){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
   } else {
-    Log ("Summarizing {0} items" -f $AllItems.Count)
+    Log ("Summarizing {0} items (modelPool={1})" -f $AllItems.Count, ($modelPool -join ', '))
     for($idx=0; $idx -lt $AllItems.Count; $idx++){
       $i = $AllItems[$idx]; if(-not $i){ continue }
       $label = Trunc $i.title 70
       Log ("  [{0}/{1}] {2} :: {3}" -f ($idx+1), $AllItems.Count, $i.source, $label)
       $swItem=[System.Diagnostics.Stopwatch]::StartNew(); $cacheKey = ($i.source + '|' + $i.title + '|' + $i.publishedAt.ToString('u'))
       if($SummaryCache.ContainsKey($cacheKey)){ Log '    cache hit'; $summaries += $SummaryCache[$cacheKey]; $swItem.Stop(); continue }
-      try {
-  $prompt = @"
+      if($allModelsDeactivated){
+        $fallback = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() }
+        $summaries += $fallback; $SummaryCache[$cacheKey] = $fallback
+        Log '    all models deactivated -> raw fallback'
+        $swItem.Stop(); continue
+      }
+      $obtained=$false
+      foreach($model in $modelPool){
+        $ms = $ModelStatus[$model]
+        if(-not $ms.active){ continue }
+        Log "    try model: $model"
+        try {
+          $prompt = @"
 Summarize the following update for a weekly newsletter. Keep it factual. Mention product/area and any version/flag/region/date specifics.
 
 TITLE: $($i.title)
@@ -501,24 +520,48 @@ SOURCE: $($i.source)
 RAW:
 $([string]$i.raw)
 "@
-        $out = Invoke-GitHubModelChat -Prompt $prompt -HeadersGitHub $HeadersGitHub -MaxAttempts $MaxSummaryRetries -BaseDelaySeconds $SummaryRetryBaseSeconds
-        if(-not $out.summary){ $out = @{ summary = Trunc($i.title,200) } }
-        $cleanSummary = Format-BareUrls (($out.summary -replace '\s+',' ').Trim())
-        $cleanBullets = @(); foreach($b in @($out.bullets)){ if($b){ $cleanBullets += (Format-BareUrls (($b -replace '\s+',' ').Trim())) } }
-        $sum = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=$cleanSummary; bullets=$cleanBullets }
-        $summaries += $sum; $SummaryCache[$cacheKey] = $sum
-      } catch {
-        Write-Warning "Summarize failed for item ($label): $($_.Exception.Message) -- fallback to title/raw trunc"
+          $out = Invoke-GitHubModelChat -Prompt $prompt -HeadersGitHub $HeadersGitHub -MaxAttempts $MaxSummaryRetries -BaseDelaySeconds $SummaryRetryBaseSeconds -Model $model
+          if(-not $out.summary){ $out = @{ summary = Trunc($i.title,200) } }
+          $cleanSummary = Format-BareUrls (($out.summary -replace '\s+',' ').Trim())
+          $cleanBullets = @(); foreach($b in @($out.bullets)){ if($b){ $cleanBullets += (Format-BareUrls (($b -replace '\s+',' ').Trim())) } }
+          $sum = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=$cleanSummary; bullets=$cleanBullets }
+          $summaries += $sum; $SummaryCache[$cacheKey] = $sum
+          $ms.successes++
+          $obtained=$true
+          break
+        } catch {
+          $ms.failures++
+          $status = $null; try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
+          if($status -eq 429){
+            $ms.had429 = $true; $ms.active = $false
+            Log "      429 -> deactivate $model"
+            continue
+          } else {
+            Log ("      model $model failed status={0} msg={1}" -f $status,$_.Exception.Message)
+            continue
+          }
+        }
+      }
+      if(-not $obtained){
+        Log '    no active models succeeded -> raw fallback'
         $fallback = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() }
         $summaries += $fallback; $SummaryCache[$cacheKey] = $fallback
-      } finally { $swItem.Stop(); Log ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds)) }
+        if(-not ($ModelStatus.Values | Where-Object { $_.active })){
+          $allModelsDeactivated = $true
+          Log '    all models now deactivated; remaining items raw'
+        }
+      }
+      $swItem.Stop(); Log ("    took {0:n1} s" -f ($swItem.Elapsed.TotalSeconds))
     }
     Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
+    foreach($ms in $ModelStatus.Values){ Log ("ModelStatus :: {0} active={1} successes={2} failures={3} had429={4}" -f $ms.model,$ms.active,$ms.successes,$ms.failures,$ms.had429) }
   }
   if($DumpSummaries){
     Log ("DumpSummaries enabled. Total summaries: {0}" -f $summaries.Count)
     $idx=0; foreach($s in $summaries){ $idx++; $t=Trunc $s.title 70; $sumShort=Trunc $s.summary 160; Log ("  [{0}/{1}] {2} :: {3} :: {4}" -f $idx,$summaries.Count,$s.source,$t,$sumShort) }
   }
+  # Expose model status for caller diagnostics
+  $script:LastModelStatus = $ModelStatus
   return $summaries
 }
 
