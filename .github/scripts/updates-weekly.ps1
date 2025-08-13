@@ -454,7 +454,7 @@ function Summarize-Items {
       $swItem=[System.Diagnostics.Stopwatch]::StartNew(); $cacheKey = ($i.source + '|' + $i.title + '|' + $i.publishedAt.ToString('u'))
       if($SummaryCache.ContainsKey($cacheKey)){ Log '    cache hit'; $summaries += $SummaryCache[$cacheKey]; $swItem.Stop(); continue }
       try {
-        $prompt = @"`nSummarize the following update for a weekly newsletter. Keep it factual. Mention product/area and any version/flag/region/date specifics.`n`nTITLE: $($i.title)`nURL: $($i.url)`nDATE: $($i.publishedAt.ToString('yyyy-MM-dd'))`nSOURCE: $($i.source)`nRAW:`n$([string]$i.raw)`n"@
+        $prompt = @"Summarize the following update for a weekly newsletter. Keep it factual. Mention product/area and any version/flag/region/date specifics.`n`nTITLE: $($i.title)`nURL: $($i.url)`nDATE: $($i.publishedAt.ToString('yyyy-MM-dd'))`nSOURCE: $($i.source)`nRAW:`n$([string]$i.raw)`n"@
         $out = Invoke-GitHubModelChat -Prompt $prompt -HeadersGitHub $HeadersGitHub -MaxAttempts $MaxSummaryRetries -BaseDelaySeconds $SummaryRetryBaseSeconds
         if(-not $out.summary){ $out = @{ summary = Trunc($i.title,200) } }
         $cleanSummary = Format-BareUrls (($out.summary -replace '\s+',' ').Trim())
