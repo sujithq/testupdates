@@ -174,6 +174,14 @@ function Invoke-GitHubModelChat {
     try {
       $respHeaders = $null
       $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop -ResponseHeadersVariable respHeaders
+
+      $r = $_.Exception.Response
+      if ($r) {
+        "Status: " + $r.StatusCode.value__ | Write-Host
+        foreach ($k in $r.Headers.AllKeys) { "$k: " + $r.Headers[$k] | Write-Host }
+      }
+      throw
+
       # Rate limit headers (best effort) from response headers variable (Invoke-RestMethod does not attach headers to body)
       if($respHeaders){
         $rlRemain = $respHeaders['x-ratelimit-remaining']
