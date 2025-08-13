@@ -20,7 +20,7 @@ param(
 
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
-  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=monthly'
+  [string]$Frequencies = 'Azure=weekly,GitHub=weekly,Terraform=weekly'
   ,
   # Time window mode: 'week' (Mon-Sun current week) or 'rolling'
   [ValidateSet('week','rolling')][string]$WindowType = 'week',
@@ -129,7 +129,7 @@ $TerraformWindowEndUtc = $weekEndUtc
 function Invoke-GitHubModelChat {
   param(
     [Parameter(Mandatory)] [string]$Prompt,
-    [string]$Model = 'openai/gpt-4o-mini',
+    [string]$Model = 'openai/gpt-5-mini',
     [decimal]$Temperature = 0.2,
     [int]$MaxTokens = 350,
     [int]$MaxAttempts = $MaxSummaryRetries,
