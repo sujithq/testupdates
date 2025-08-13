@@ -160,6 +160,8 @@ function Invoke-GitHubModelChat {
     )
   } | ConvertTo-Json -Depth 8
 
+  $uri = 'https://models.github.ai/inference/chat/completions'
+
 
         for ($attempt = 0; $attempt -le $MaxAttempts; $attempt++) {
         try {
