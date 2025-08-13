@@ -14,9 +14,9 @@ param(
   # [int]$MaxAzure = 20,
   # [int]$MaxGitHub = 12,
   # [int]$MaxTerraform = 8,
-  [int]$MaxAzure = 1,
-  [int]$MaxGitHub = 1,
-  [int]$MaxTerraform = 1,
+  [ValidateRange(0,200)][int]$MaxAzure = 1,
+  [ValidateRange(0,200)][int]$MaxGitHub = 1,
+  [ValidateRange(0,200)][int]$MaxTerraform = 1,
 
   # Which Terraform repos to watch (owner/repo)
   # [string[]]$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm"),
@@ -40,7 +40,9 @@ param(
   # Always log external feed/API URLs (not only via -Verbose)
   [switch]$ShowApiUrls,
   # Optional: verbose structured dump of computed summaries
-  [switch]$DumpSummaries
+  [switch]$DumpSummaries,
+  # Remove existing subfolders under the target content directory before generation
+  [switch]$CleanOutput
 )
 <#
  .SYNOPSIS
@@ -76,9 +78,17 @@ function Log { param([string]$Message) Write-Host "[$(Get-Date -Format 'HH:mm:ss
 
 function Initialize-Environment {
   param(
-    [string]$Token
+    [string]$Token,
+    [switch]$AllowMissingToken
   )
-  if(-not $Token){ throw 'GITHUB_TOKEN is required (with models:read, contents:write).' }
+  if(-not $Token){
+    if($AllowMissingToken){
+      Write-Warning 'GITHUB_TOKEN missing: proceeding without authenticated GitHub calls (summaries disabled / public endpoints only).'
+      return @{ HeadersGitHub = @{} }
+    } else {
+      throw 'GITHUB_TOKEN is required (with models:read, contents:write).'
+    }
+  }
   return @{
     HeadersGitHub = @{
       'Authorization'       = "Bearer $Token"
@@ -254,9 +264,9 @@ function Format-LinkUrl([string]$u){ if(-not $u){ return '' }; $clean = $u.Trim(
 
 # --- Source fetchers (parameterized)
 $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'
-function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[Alias('Max')][int]$MaxItems = 20,[switch]$ShowUrls)
+function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[Parameter(Mandatory)][int]$Limit,[switch]$ShowUrls)
   Log 'Fetch: Azure updates (Azure Charts RSS)'
-  Log "Azure limit = $MaxItems"
+  Log "Azure limit (requested) = $Limit"
   if($ShowUrls){ Log "URL: $AzureRss" }
   try {
     $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -270,14 +280,15 @@ function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[Alias('
       if($pub -lt $StartUtc -or $pub -gt $EndUtc){ continue }
       [pscustomobject]@{ source='Azure'; title=[string]$i.title; url=[string]$i.link; publishedAt=$pub.ToUniversalTime(); raw=[string]$i.description }
     }
-  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxItems
+  if($Limit -lt 1){ Log 'Azure limit <1 -> returning 0 items'; return @() }
+  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $Limit
   } catch { Write-Warning "Azure RSS failed: $($_.Exception.Message)"; return @() }
 }
 
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
-function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[Alias('Max')][int]$MaxItems = 12,[switch]$ShowUrls)
+function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[Parameter(Mandatory)][int]$Limit,[switch]$ShowUrls)
   Log 'Fetch: GitHub Changelog RSS'
-  Log "GitHub changelog limit = $MaxItems"
+  Log "GitHub changelog limit (requested) = $Limit"
   if($ShowUrls){ Log "URL: $GitHubChangelogRss" }
   try {
     $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -291,7 +302,8 @@ function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[Alia
       if($pub -lt $StartUtc -or $pub -gt $EndUtc){ continue }
       [pscustomobject]@{ source='GitHub'; title=[string]$i.title; url=[string]$i.link; publishedAt=$pub.ToUniversalTime(); raw=Trunc([string]$i.'content:encoded',2000) }
     }
-  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxItems
+  if($Limit -lt 1){ Log 'GitHub changelog limit <1 -> returning 0 items'; return @() }
+  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $Limit
   } catch { Write-Warning "GitHub Changelog RSS failed: $($_.Exception.Message)"; return @() }
 }
 
@@ -305,12 +317,12 @@ function Get-TerraformReleases { param(
     [string[]]$Repos,
     [datetime]$StartUtc,
     [datetime]$EndUtc,
-    [Alias('Max')][int]$MaxItems = 8,
+    [Parameter(Mandatory)][int]$Limit,
     [hashtable]$HeadersGitHub,
     [switch]$ShowUrls
   )
   Log 'Fetch: Terraform releases'
-  Log "Terraform limit = $MaxItems"
+  Log "Terraform limit (requested) = $Limit"
   $items=@(); $totalSkippedWindow=0
   $sw=[System.Diagnostics.Stopwatch]::StartNew()
   foreach($full in $Repos){
@@ -332,7 +344,8 @@ function Get-TerraformReleases { param(
   }
   $items = $items | Sort-Object publishedAt -Descending
   $beforeCap = $items.Count
-  $capped = $items | Select-Object -First $MaxItems
+  if($Limit -lt 1){ Log 'Terraform limit <1 -> returning 0 items'; return @() }
+  $capped = $items | Select-Object -First $Limit
   $sw.Stop()
   Log ("Terraform summary: included={0} (pre-cap {1}), skippedWindow={2}, elapsed={3:n1}s" -f $capped.Count,$beforeCap,$totalSkippedWindow,$sw.Elapsed.TotalSeconds)
   return $capped
@@ -348,7 +361,11 @@ function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
 }
 
 function Convert-ItemsToMarkdown($items,$windowStartLocal,$windowEndLocal){
-  $lines=@(); $lines += '## This period at a glance'; $lines += ''; $lines += "**Window:** $($windowStartLocal.ToString('yyyy-MM-dd')) → $($windowEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)"; $lines += ''
+  $lines=@();
+  $lines += '## This period at a glance'
+  $lines += ''
+  $lines += "**Window:** $($windowStartLocal.ToString('yyyy-MM-dd')) → $($windowEndLocal.ToString('yyyy-MM-dd')) (Europe/Brussels)"
+  $lines += ''
   foreach($x in ($items | Sort-Object date -Descending)){
     $bul = ToBulletMd $x.bullets
     $fmtUrl = Format-LinkUrl $x.url
@@ -359,6 +376,7 @@ function Convert-ItemsToMarkdown($items,$windowStartLocal,$windowEndLocal){
   return ($lines -join "`n") + "`n"
 }
 
+# Rewritten simplified Write-PerTypePost (front matter fully rebuilt each run to avoid op_Addition issues)
 function Write-PerTypePost {
   param(
     [string]$TypeName,[string]$BaseSlug,$Items,[string]$Tag,[string]$Freq,
@@ -366,11 +384,13 @@ function Write-PerTypePost {
     [string]$RepoRoot,[string]$ContentDir,
     [System.TimeZoneInfo]$TimeZone
   )
-  if(-not $Items -or $Items.Count -eq 0){ return $null }
+  Log "Write-PerTypePost: start Type=$TypeName Items=$([int]($Items?.Count)) Freq=$Freq"
+  if(-not $Items -or $Items.Count -eq 0){ Log 'Write-PerTypePost: no items -> skip'; return $null }
   $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($WinStartUtc,$TimeZone)
   $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($WinEndUtc,$TimeZone)
   $cadenceTag = if($Freq){ $Freq } else { 'weekly' }
   $tagsArr = @('updates', $cadenceTag, $Tag) | Select-Object -Unique
+  try {
   switch($Freq){
     'biweekly' {
       $w1 = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
@@ -399,35 +419,46 @@ function Write-PerTypePost {
     }
   }
   $desc  = "Highlights from $TypeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
-  $body = Convert-ItemsToMarkdown -items $Items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
+  $body  = Convert-ItemsToMarkdown -items $Items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
   $targetDir = Join-Path $RepoRoot $ContentDir; New-Item -ItemType Directory -Force -Path $targetDir | Out-Null
   $folder = Join-Path $targetDir $folderName; New-Item -ItemType Directory -Force -Path $folder | Out-Null
   $file = Join-Path $folder 'index.md'
   $nowIso = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+  $titleToUse = $title; $dateToUse = $nowIso
   if(Test-Path $file){
-    $existingLines = Get-Content -Path $file
-    $openIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -First 1).LineNumber - 1
-    $closeIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -Skip 1 -First 1).LineNumber - 1
-    if($openIdx -ge 0 -and $closeIdx -gt $openIdx){
-      for($i = $openIdx+1; $i -lt $closeIdx; $i++){
-        if($existingLines[$i] -match '^\s*lastmod\s*='){ $existingLines[$i] = "lastmod = $nowIso" }
+    try {
+      $lines = Get-Content -Path $file -ErrorAction Stop
+      $markerIdxs = @(); for($i=0;$i -lt $lines.Count;$i++){ if($lines[$i].Trim() -eq '+++'){ $markerIdxs += $i } }
+      if($markerIdxs.Count -ge 2){
+        $openIdx=$markerIdxs[0]; $closeIdx=$markerIdxs[1]
+        for($i=$openIdx+1;$i -lt $closeIdx;$i++){
+          if($lines[$i] -match "^title\s*=\s*'(.*)'"){ $titleToUse = $matches[1] }
+          elseif($lines[$i] -match '^date\s*=\s*([0-9TZ:-]+)'){ $dateToUse = $matches[1] }
+        }
       }
-      if(-not ($existingLines[$openIdx+1..($closeIdx-1)] -match '^\s*lastmod\s*=')){
-        $existingLines = @($existingLines[0..($closeIdx-1)] + @("lastmod = $nowIso") + $existingLines[$closeIdx..($existingLines.Count-1)])
-      }
-      $frontMatter = $existingLines[0..$closeIdx]
-      $newContent = @($frontMatter; ''; $body.TrimEnd())
-      Log "Updating existing post (lastmod + body): $file"
-      Set-Content -Path $file -Value $newContent -Encoding UTF8
-    } else {
-      $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
-      Log "Regenerating malformed front matter: $file"
-      Set-Content -Path $file -Value (@($fm, $body) -join "") -Encoding UTF8
-    }
-  } else {
-    $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
-    Log "Writing new post: $file"
-    Set-Content -Path $file -Value (@($fm, $body) -join "") -Encoding UTF8
+    } catch { Write-Warning ("Failed to parse existing front matter for {0}: {1}" -f $file,$_.Exception.Message) }
+  }
+  # Build new front matter always
+  $tagList = ($tagsArr | ForEach-Object { "'$_'" }) -join ', '
+  $frontMatter = @(
+    '+++',
+    "title = '$titleToUse'",
+  "date = $dateToUse",
+  "lastmod = $nowIso",  # always refreshed on each run
+    'draft = false',
+    "tags = [$tagList]",
+    "description = '$(($desc -replace "'","''"))'",
+    '[params]',
+    "    author = 'sujith'",
+    '+++',''
+  ) -join "`n"
+  $output = ($frontMatter + $body)
+  if(Test-Path $file){ Log "Updating post (lastmod refresh): $file" } else { Log "Writing new post: $file" }
+  Set-Content -Path $file -Value $output -Encoding UTF8
+  Log "Write-PerTypePost: done file=$file"
+  } catch {
+    Write-Warning ("Write-PerTypePost failed Type={0} File={1} Err={2}" -f $TypeName,$file,$_.Exception.Message)
+    throw
   }
   return $file
 }
@@ -496,22 +527,54 @@ function Invoke-WeeklyUpdates {
     [string]$RepoRoot,[string]$ContentDir,[int]$MaxAzure,[int]$MaxGitHub,[int]$MaxTerraform,
     [string]$Frequencies,[ValidateSet('week','rolling')][string]$WindowType,[int]$RollingDays,
     [switch]$DisableSummaries,[int]$MaxSummaryRetries,[int]$SummaryRetryBaseSeconds,
-    [switch]$ShowApiUrls,[switch]$DumpSummaries
+  [switch]$ShowApiUrls,[switch]$DumpSummaries,[switch]$CleanOutput
   )
-  $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById('Romance Standard Time')
-  $envCtx = Initialize-Environment -Token $env:GITHUB_TOKEN
+  # Environment variable overrides (only if caller did not bind the parameter explicitly)
+  if(-not $PSBoundParameters.ContainsKey('MaxAzure')     -and $env:MAX_AZURE){     $MaxAzure     = [int]$env:MAX_AZURE }
+  if(-not $PSBoundParameters.ContainsKey('MaxGitHub')    -and $env:MAX_GITHUB){    $MaxGitHub    = [int]$env:MAX_GITHUB }
+  if(-not $PSBoundParameters.ContainsKey('MaxTerraform') -and $env:MAX_TERRAFORM){ $MaxTerraform = [int]$env:MAX_TERRAFORM }
+  Log "Invoke-WeeklyUpdates params -> RepoRoot='$RepoRoot' ContentDir='$ContentDir' MaxAzure=$MaxAzure MaxGitHub=$MaxGitHub MaxTerraform=$MaxTerraform Freq='$Frequencies' WindowType=$WindowType RollingDays=$RollingDays DisableSummaries=$DisableSummaries ShowApiUrls=$ShowApiUrls"
+  # Cross-platform timezone resolution (Windows vs Linux/WSL)
+  $tz = $null
+  $tzIds = @('Romance Standard Time','Europe/Brussels','UTC')
+  foreach($id in $tzIds){ try { $tz = [System.TimeZoneInfo]::FindSystemTimeZoneById($id); break } catch {} }
+  if(-not $tz){ $tz = [System.TimeZoneInfo]::Utc; Write-Warning 'Falling back to UTC timezone.' }
+  $envCtx = Initialize-Environment -Token $env:GITHUB_TOKEN -AllowMissingToken:$DisableSummaries
   $HeadersGitHub = $envCtx.HeadersGitHub
   $TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
   $TerraformRepos = Validate-TerraformRepos -TerraformRepos $TerraformRepos -Frequencies $Frequencies
   $FrequencyMap = Parse-Frequencies -FreqRaw $Frequencies
   $baseWindow = Compute-BaseWindow -WindowType $WindowType -RollingDays $RollingDays -TimeZone $tz
   $per = Compute-PerSourceWindows -FrequencyMap $FrequencyMap -BaseWindow $baseWindow -TimeZone $tz
+  # Clean existing output folders if requested
+  if($CleanOutput){
+    $targetDir = Join-Path $RepoRoot $ContentDir
+    try {
+      if(Test-Path $targetDir){
+        $resolvedRepo = (Resolve-Path -LiteralPath $RepoRoot).Path
+        $resolvedTarget = (Resolve-Path -LiteralPath $targetDir).Path
+        if($resolvedTarget -notlike "$resolvedRepo*"){ throw "Refusing to clean outside repo root: $resolvedTarget" }
+        Log "CleanOutput: removing existing subfolders under $resolvedTarget"
+        Get-ChildItem -Path $resolvedTarget -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+          try { Remove-Item -LiteralPath $_.FullName -Recurse -Force -ErrorAction Stop; Log "  Removed folder: $($_.Name)" } catch { Write-Warning "  Failed to remove $($_.FullName): $($_.Exception.Message)" }
+        }
+      } else { Log "CleanOutput: target directory does not exist yet ($targetDir)" }
+    } catch { Write-Warning "CleanOutput failed: $($_.Exception.Message)" }
+  }
   # Collect
-  $azure = Get-AzureUpdates -StartUtc $per.AzureStart -EndUtc $per.AzureEnd -MaxItems $MaxAzure -ShowUrls:$ShowApiUrls
-  $ghchg = Get-GitHubChangelog -StartUtc $per.GitHubStart -EndUtc $per.GitHubEnd -MaxItems $MaxGitHub -ShowUrls:$ShowApiUrls
-  $tf    = Get-TerraformReleases -Repos $TerraformRepos -StartUtc $per.TerraformStart -EndUtc $per.TerraformEnd -MaxItems $MaxTerraform -HeadersGitHub $HeadersGitHub -ShowUrls:$ShowApiUrls
+  $azure = Get-AzureUpdates -StartUtc $per.AzureStart -EndUtc $per.AzureEnd -Limit $MaxAzure -ShowUrls:$ShowApiUrls
+  $ghchg = Get-GitHubChangelog -StartUtc $per.GitHubStart -EndUtc $per.GitHubEnd -Limit $MaxGitHub -ShowUrls:$ShowApiUrls
+  $tf    = Get-TerraformReleases -Repos $TerraformRepos -StartUtc $per.TerraformStart -EndUtc $per.TerraformEnd -Limit $MaxTerraform -HeadersGitHub $HeadersGitHub -ShowUrls:$ShowApiUrls
+  if($azure -and $azure -isnot [System.Array]){ $azure = ,$azure }
+  if($ghchg -and $ghchg -isnot [System.Array]){ $ghchg = ,$ghchg }
+  if($tf -and $tf -isnot [System.Array]){ $tf = ,$tf }
   Log ("Collected: Azure={0}, GitHub={1}, Terraform={2}" -f $azure.Count,$ghchg.Count,$tf.Count)
-  $all = @($azure + $ghchg + $tf)
+  # Safely aggregate items; avoid '+' which fails for single PSCustomObject (op_Addition)
+  $all = @()
+  if($azure){ if($azure -is [System.Array]){ $all += $azure } else { $all += ,$azure } }
+  if($ghchg){ if($ghchg -is [System.Array]){ $all += $ghchg } else { $all += ,$ghchg } }
+  if($tf){ if($tf -is [System.Array]){ $all += $tf } else { $all += ,$tf } }
+  Log ("Aggregated total items: {0}" -f $all.Count)
   $summaries = Summarize-Items -AllItems $all -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -HeadersGitHub $HeadersGitHub -DumpSummaries:$DumpSummaries
   $bySource = $summaries | Group-Object source | Sort-Object Name
   $groups=@{}; foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
@@ -544,4 +607,4 @@ function Invoke-WeeklyUpdates {
 }
 
 # --- ENTRYPOINT ------------------------------------------------------------
-Invoke-WeeklyUpdates -RepoRoot $RepoRoot -ContentDir $ContentDir -MaxAzure $MaxAzure -MaxGitHub $MaxGitHub -MaxTerraform $MaxTerraform -Frequencies $Frequencies -WindowType $WindowType -RollingDays $RollingDays -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -ShowApiUrls:$ShowApiUrls -DumpSummaries:$DumpSummaries | Out-Null
+Invoke-WeeklyUpdates -RepoRoot $RepoRoot -ContentDir $ContentDir -MaxAzure $MaxAzure -MaxGitHub $MaxGitHub -MaxTerraform $MaxTerraform -Frequencies $Frequencies -WindowType $WindowType -RollingDays $RollingDays -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -ShowApiUrls:$ShowApiUrls -DumpSummaries:$DumpSummaries -CleanOutput:$CleanOutput | Out-Null
