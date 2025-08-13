@@ -35,7 +35,9 @@ param(
   [int]$SummaryRetryBaseSeconds = 2
   ,
   # Always log external feed/API URLs (not only via -Verbose)
-  [switch]$ShowApiUrls
+  [switch]$ShowApiUrls,
+  # When first model 429/403 rate limit is hit, skip all remaining summaries (fast fail fallback)
+  [switch]$SkipOnFirstRateLimit
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -167,6 +169,14 @@ function Invoke-GitHubModelChat {
     $attempt++
     try {
       $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
+      # Rate limit headers (best effort)
+      try {
+        $respObj = $res
+        $rlRemain = $res.Headers['x-ratelimit-remaining']
+        $rlLimit  = $res.Headers['x-ratelimit-limit']
+        $rlReset  = $res.Headers['x-ratelimit-reset']
+        if($attempt -eq 1 -and $rlRemain){ Log ("  Model rate: remaining={0}/{1} reset={2}" -f $rlRemain,$rlLimit,$rlReset) }
+      } catch {}
       $json = $res.choices[0].message.content
       try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
     } catch {
@@ -193,6 +203,14 @@ function Invoke-GitHubModelChat {
           if($reset -and $reset -match '^\d+$'){
             try { $resetDt=[DateTimeOffset]::FromUnixTimeSeconds([long]$reset); $delay=[math]::Max(1,[int][math]::Ceiling(($resetDt.UtcDateTime-[DateTime]::UtcNow).TotalSeconds)) } catch {}
           }
+        }
+        $remainNow = $resp.Headers['x-ratelimit-remaining']
+        $limitNow  = $resp.Headers['x-ratelimit-limit']
+        $resetNow  = $resp.Headers['x-ratelimit-reset']
+        Log ("  Rate limit hit ({0}) remain={1} limit={2} reset={3}" -f $status,$remainNow,$limitNow,$resetNow)
+        if($SkipOnFirstRateLimit -and $attempt -eq 1){
+          Log '  SkipOnFirstRateLimit active: returning minimal fallback summary.'
+          return @{ summary = 'Rate limit reached; raw title used.' }
         }
       }
       if(-not $delay){
