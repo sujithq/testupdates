@@ -39,7 +39,9 @@ param(
   # Optional: verbose structured dump of computed summaries
   [switch]$DumpSummaries,
   # Remove existing subfolders under the target content directory before generation
-  [switch]$CleanOutput
+  [switch]$CleanOutput,
+  # Optional: explicit model pool for summarization (ordered preference). If omitted, defaults (base + -mini variants) are used.
+  [string[]]$ModelPool = @()
 )
 <#
  .SYNOPSIS
@@ -472,26 +474,35 @@ function Summarize-Items {
     [int]$MaxSummaryRetries,
     [int]$SummaryRetryBaseSeconds,
     [hashtable]$HeadersGitHub,
-    [switch]$DumpSummaries
+  [switch]$DumpSummaries,
+  [string[]]$ModelPool
   )
   $summaries = @(); $swSumm = [System.Diagnostics.Stopwatch]::StartNew(); if($MaxSummaryRetries -lt 1){ $MaxSummaryRetries = 1 }
   $SummaryCache = @{}
-  # Build model pool (base models + their -mini counterparts) per spec
-  $baseModels = @('openai/gpt-4.1','openai/gpt-4o','openai/gpt-5','openai/o1','openai/o3')
-  $modelPool = @()
-  foreach($b in $baseModels){
-    $modelPool += $b
-    $mini = "$b-mini"
-    $modelPool += $mini
+  # Determine model pool: use caller-provided list or fallback default (base + -mini variants)
+  $baseDefaults = @('openai/gpt-4.1','openai/gpt-4o','openai/gpt-5','openai/o1','openai/o3')
+  $defaultExpanded = @(); foreach($b in $baseDefaults){ $defaultExpanded += $b; $defaultExpanded += ("$b-mini") }
+  if(-not $ModelPool -or $ModelPool.Count -eq 0){
+    # No user pool -> use full default expanded list
+    $ModelPool = $defaultExpanded
+  Log 'ModelPool: no user-specified models; using full default expanded list'
+  } else {
+    # User supplied pool -> use exactly as provided (no implicit defaults appended)
+    $ModelPool = @($ModelPool)
+  Log 'ModelPool: using user-specified list only (no defaults appended)'
   }
+  # Normalize pool (trim, dedupe, preserve first occurrence order)
+  $seen = @{}; $normalized = @()
+  foreach($m in $ModelPool){ if(-not $m){ continue }; $trim = $m.Trim(); if($trim -and -not $seen.ContainsKey($trim)){ $seen[$trim] = $true; $normalized += $trim } }
+  $ModelPool = $normalized
   $ModelStatus = [ordered]@{}
-  foreach($m in $modelPool){ $ModelStatus[$m] = [pscustomobject]@{ model=$m; had429=$false; failures=0; successes=0; active=$true } }
+  foreach($m in $ModelPool){ $ModelStatus[$m] = [pscustomobject]@{ model=$m; had429=$false; failures=0; successes=0; active=$true } }
   $allModelsDeactivated = $false
   if($DisableSummaries){
     Log 'Summaries disabled (-DisableSummaries); using raw titles only'
     foreach($i in $AllItems){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
   } else {
-    Log ("Summarizing {0} items (modelPool={1})" -f $AllItems.Count, ($modelPool -join ', '))
+  Log ("Summarizing {0} items (modelPool={1})" -f $AllItems.Count, ($ModelPool -join ', '))
     for($idx=0; $idx -lt $AllItems.Count; $idx++){
       $i = $AllItems[$idx]; if(-not $i){ continue }
       $label = Trunc $i.title 70
@@ -505,7 +516,7 @@ function Summarize-Items {
         $swItem.Stop(); continue
       }
       $obtained=$false
-      foreach($model in $modelPool){
+  foreach($model in $ModelPool){
         $ms = $ModelStatus[$model]
         if(-not $ms.active){ continue }
         Log "    try model: $model"
@@ -527,6 +538,8 @@ $([string]$i.raw)
           $sum = [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=$cleanSummary; bullets=$cleanBullets }
           $summaries += $sum; $SummaryCache[$cacheKey] = $sum
           $ms.successes++
+          # Reorder pool: promote successful model to front for subsequent items
+          $ModelPool = @($model) + (@($ModelPool | Where-Object { $_ -ne $model }))
           $obtained=$true
           break
         } catch {
@@ -534,11 +547,16 @@ $([string]$i.raw)
           $status = $null; try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
           if($status -eq 429){
             $ms.had429 = $true; $ms.active = $false
-            Log "      429 -> deactivate $model"
-            continue
+            Log "      429 -> deactivate $model (will try next active model)"
+            # loop continues
           } else {
-            Log ("      model $model failed status={0} msg={1}" -f $status,$_.Exception.Message)
-            continue
+            Log ("      model $model failed status={0} msg={1} -> trying next" -f $status,$_.Exception.Message)
+            # keep model active for possible transient non-429? (leave as-is)
+            # Permanently deactivate clearly non-retryable client errors
+            if($status -in 400,401,403,404,415,422){
+              $ms.active = $false
+              Log "        status $status deemed non-retryable -> deactivate $model"
+            }
           }
         }
       }
@@ -570,7 +588,8 @@ function Invoke-WeeklyUpdates {
     [string]$RepoRoot,[string]$ContentDir,[int]$MaxAzure,[int]$MaxGitHub,[int]$MaxTerraform,
     [string]$Frequencies,[ValidateSet('week','rolling')][string]$WindowType,[int]$RollingDays,
     [switch]$DisableSummaries,[int]$MaxSummaryRetries,[int]$SummaryRetryBaseSeconds,
-  [switch]$ShowApiUrls,[switch]$DumpSummaries,[switch]$CleanOutput
+  [switch]$ShowApiUrls,[switch]$DumpSummaries,[switch]$CleanOutput,
+    [string[]]$ModelPool
   )
   # Environment variable overrides (only if caller did not bind the parameter explicitly)
   if(-not $PSBoundParameters.ContainsKey('MaxAzure')     -and $env:MAX_AZURE){     $MaxAzure     = [int]$env:MAX_AZURE }
@@ -618,7 +637,7 @@ function Invoke-WeeklyUpdates {
   if($ghchg){ if($ghchg -is [System.Array]){ $all += $ghchg } else { $all += ,$ghchg } }
   if($tf){ if($tf -is [System.Array]){ $all += $tf } else { $all += ,$tf } }
   Log ("Aggregated total items: {0}" -f $all.Count)
-  $summaries = Summarize-Items -AllItems $all -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -HeadersGitHub $HeadersGitHub -DumpSummaries:$DumpSummaries
+  $summaries = Summarize-Items -AllItems $all -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -HeadersGitHub $HeadersGitHub -DumpSummaries:$DumpSummaries -ModelPool $ModelPool
   $bySource = $summaries | Group-Object source | Sort-Object Name
   $groups=@{}; foreach($g in $bySource){ $groups[$g.Name] = $g.Group }
   $map = @(
@@ -650,4 +669,13 @@ function Invoke-WeeklyUpdates {
 }
 
 # --- ENTRYPOINT ------------------------------------------------------------
-Invoke-WeeklyUpdates -RepoRoot $RepoRoot -ContentDir $ContentDir -MaxAzure $MaxAzure -MaxGitHub $MaxGitHub -MaxTerraform $MaxTerraform -Frequencies $Frequencies -WindowType $WindowType -RollingDays $RollingDays -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -ShowApiUrls:$ShowApiUrls -DumpSummaries:$DumpSummaries -CleanOutput:$CleanOutput | Out-Null
+# Normalize ModelPool if provided as a single comma-separated string
+if($ModelPool -and $ModelPool.Count -eq 1 -and $ModelPool[0] -is [string] -and $ModelPool[0] -match ','){
+  $ModelPool = $ModelPool[0].Split(',') | ForEach-Object { $_.Trim() } | Where-Object { $_ }
+}
+if($ModelPool){
+  try { Log ("ModelPool (post-normalize) -> count={0} :: {1}" -f $ModelPool.Count, ($ModelPool -join ', ')) } catch { Log 'ModelPool logging failed' }
+} else {
+  Log 'ModelPool not supplied; defaults will be expanded inside Summarize-Items'
+}
+Invoke-WeeklyUpdates -RepoRoot $RepoRoot -ContentDir $ContentDir -MaxAzure $MaxAzure -MaxGitHub $MaxGitHub -MaxTerraform $MaxTerraform -Frequencies $Frequencies -WindowType $WindowType -RollingDays $RollingDays -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -ShowApiUrls:$ShowApiUrls -DumpSummaries:$DumpSummaries -CleanOutput:$CleanOutput -ModelPool $ModelPool | Out-Null
