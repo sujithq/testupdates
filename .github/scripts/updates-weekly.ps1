@@ -137,7 +137,7 @@ $TerraformWindowEndUtc = $weekEndUtc
 function Invoke-GitHubModelChat {
   param(
     [Parameter(Mandatory)] [string]$Prompt,
-    [string]$Model = 'openai/gpt-4o-mini',
+    [string]$Model = 'openai/gpt-4.1', # 'openai/gpt-4o-mini',
     [decimal]$Temperature = 0.2,
     [int]$MaxTokens = 350,
     [int]$MaxAttempts = $MaxSummaryRetries,
