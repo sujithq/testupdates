@@ -37,7 +37,11 @@ param(
   # Always log external feed/API URLs (not only via -Verbose)
   [switch]$ShowApiUrls,
   # When first model 429/403 rate limit is hit, skip all remaining summaries (fast fail fallback)
-  [switch]$SkipOnFirstRateLimit
+  [switch]$SkipOnFirstRateLimit,
+  # Path (relative or absolute) for persistent JSON summary cache (reduces repeat model calls)
+  [string]$SummaryCachePath = '.github/cache/summary-cache.json',
+  # Perform a preflight GitHub rate limit check & log before first model call
+  [switch]$PreflightRateLimit
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -168,15 +172,15 @@ function Invoke-GitHubModelChat {
   while($attempt -lt [math]::Max(1,$MaxAttempts)){
     $attempt++
     try {
-      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
-      # Rate limit headers (best effort)
-      try {
-        $respObj = $res
-        $rlRemain = $res.Headers['x-ratelimit-remaining']
-        $rlLimit  = $res.Headers['x-ratelimit-limit']
-        $rlReset  = $res.Headers['x-ratelimit-reset']
+      $respHeaders = $null
+      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop -ResponseHeadersVariable respHeaders
+      # Rate limit headers (best effort) from response headers variable (Invoke-RestMethod does not attach headers to body)
+      if($respHeaders){
+        $rlRemain = $respHeaders['x-ratelimit-remaining']
+        $rlLimit  = $respHeaders['x-ratelimit-limit']
+        $rlReset  = $respHeaders['x-ratelimit-reset']
         if($attempt -eq 1 -and $rlRemain){ Log ("  Model rate: remaining={0}/{1} reset={2}" -f $rlRemain,$rlLimit,$rlReset) }
-      } catch {}
+      }
       $json = $res.choices[0].message.content
       try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
     } catch {
@@ -398,7 +402,37 @@ RAW:\n$([string]$item.raw)
 $summaries = @()
 $swSumm = [System.Diagnostics.Stopwatch]::StartNew()
 if($MaxSummaryRetries -lt 1){ $MaxSummaryRetries = 1 }
+# --- Persistent summary cache load
 $SummaryCache = @{}
+$persistCacheFile = if([IO.Path]::IsPathRooted($SummaryCachePath)){ $SummaryCachePath } else { Join-Path $RepoRoot $SummaryCachePath }
+if(Test-Path $persistCacheFile){
+  try {
+    $raw = Get-Content -Raw -Path $persistCacheFile -ErrorAction Stop
+    if($raw.Trim()){
+      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+      foreach($entry in $parsed){
+        if($entry.PSObject.Properties.Name -contains 'key'){
+          $SummaryCache[$entry.key] = [pscustomobject]@{ source=$entry.source; title=$entry.title; url=$entry.url; date=$entry.date; summary=$entry.summary; bullets=$entry.bullets }
+        }
+      }
+      Log ("Loaded summary cache entries: {0}" -f $SummaryCache.Count)
+    }
+  } catch { Write-Warning "Failed to load summary cache: $($_.Exception.Message)" }
+}
+else {
+  # Ensure directory exists
+  try { $dir=[IO.Path]::GetDirectoryName($persistCacheFile); if($dir -and -not (Test-Path $dir)){ New-Item -ItemType Directory -Force -Path $dir | Out-Null } } catch {}
+}
+
+if($PreflightRateLimit){
+  try {
+    $rlRespHeaders = $null
+    $rl = Invoke-RestMethod -Method GET -Uri 'https://api.github.com/rate_limit' -Headers $HeadersGitHub -ErrorAction Stop -ResponseHeadersVariable rlRespHeaders
+    if($rl.resources.core){
+      Log ("Preflight rate core: remaining={0}/{1} reset={2}" -f $rl.resources.core.remaining,$rl.resources.core.limit,$rl.resources.core.reset)
+    }
+  } catch { Write-Warning "Preflight rate check failed: $($_.Exception.Message)" }
+}
 if($DisableSummaries){
   Log "Summaries disabled (-DisableSummaries); using raw titles only"
   foreach($i in $all){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
@@ -431,6 +465,17 @@ if($DisableSummaries){
   }
   Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
 }
+# --- Persist summary cache (append new entries overwriting existing file)
+try {
+  $export = @()
+  foreach($k in $SummaryCache.Keys){
+    $v = $SummaryCache[$k]
+    $export += [pscustomobject]@{ key=$k; source=$v.source; title=$v.title; url=$v.url; date=$v.date; summary=$v.summary; bullets=$v.bullets }
+  }
+  $json = $export | ConvertTo-Json -Depth 6
+  Set-Content -Path $persistCacheFile -Value $json -Encoding UTF8
+  Log ("Saved summary cache entries: {0} -> {1}" -f $SummaryCache.Count,$persistCacheFile)
+} catch { Write-Warning "Failed to save summary cache: $($_.Exception.Message)" }
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
