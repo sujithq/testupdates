@@ -25,11 +25,11 @@ jobs:
           -H "X-GitHub-Api-Version: 2022-11-28" \
           /rate_limit
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.WEEKLY }}
       - name: Run tracker
         shell: pwsh
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.WEEKLY }}
         run: |
           pwsh ./.github/scripts/updates-weekly.ps1 -RepoRoot . -ContentDir 'content/updates' -MaxAzure 20 -MaxGitHub 12 -MaxTerraform 8 -SkipOnFirstRateLimit $true
 
