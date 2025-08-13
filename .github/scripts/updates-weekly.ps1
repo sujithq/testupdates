@@ -11,9 +11,12 @@ param(
   [string]$ContentDir = 'content/updates',
 
   # Max items per source to keep the post readable
-  [int]$MaxAzure = 20,
-  [int]$MaxGitHub = 12,
-  [int]$MaxTerraform = 8,
+  # [int]$MaxAzure = 20,
+  # [int]$MaxGitHub = 12,
+  # [int]$MaxTerraform = 8,
+  [int]$MaxAzure = 1,
+  [int]$MaxGitHub = 1,
+  [int]$MaxTerraform = 1,
 
   # Which Terraform repos to watch (owner/repo)
   # [string[]]$TerraformRepos = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm"),
