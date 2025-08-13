@@ -175,12 +175,12 @@ function Invoke-GitHubModelChat {
       $respHeaders = $null
       $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop -ResponseHeadersVariable respHeaders
 
-      $r = $_.Exception.Response
-      if ($r) {
-        "Status: " + $r.StatusCode.value__ | Write-Host
-        foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
-      }
-      throw
+      # $r = $_.Exception.Response
+      # if ($r) {
+      #   "Status: " + $r.StatusCode.value__ | Write-Host
+      #   foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
+      # }
+      # throw
 
       # Rate limit headers (best effort) from response headers variable (Invoke-RestMethod does not attach headers to body)
       if($respHeaders){
@@ -193,6 +193,13 @@ function Invoke-GitHubModelChat {
       try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
     } catch {
       $lastErr = $_
+
+      $r = $lastErr.Exception.Response
+      if ($r) {
+        "Status: " + $r.StatusCode.value__ | Write-Host
+        foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
+      }
+      throw
       $status = $null
       try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
       if($status -eq 401){ throw "Model API unauthorized (401). Ensure GITHUB_TOKEN has models:read scope." }
