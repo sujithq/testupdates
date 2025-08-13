@@ -161,77 +161,49 @@ function Invoke-GitHubModelChat {
   } | ConvertTo-Json -Depth 8
 
   $uri = 'https://models.github.ai/inference/chat/completions'
-
-
-        for ($attempt = 0; $attempt -le $MaxAttempts; $attempt++) {
-        try {
-          $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -Body $body
-          return $resp
-        } catch {
-          # Extract response + headers if available
-          $we = $_.Exception
-          $httpResp = $we.Response
-          if (-not $httpResp) { throw }  # Non-HTTP error
-
-          $status = $httpResp.StatusCode.value__
-          $rateLimited = ($status -eq 429 -or $status -eq 403)
-          if (-not $rateLimited) { throw }
-
-          # Pull headers for guidance
-          $hdrs = @{}
-          try {
-            foreach ($k in $httpResp.Headers.AllKeys) { $hdrs[$k.ToLower()] = $httpResp.Headers[$k] }
-          } catch {}
-
-          # Decide sleep: prefer Retry-After; else use x-ratelimit-reset; else capped exponential backoff
-          $sleep = $null
-          if ($hdrs.ContainsKey('retry-after')) {
-            $ra = $hdrs['retry-after']
-            if ($ra -match '^\d+$') { $sleep = [int]$ra }
-            else {
-              $dt = [DateTimeOffset]::Parse($ra)
-              $sleep = [int][Math]::Ceiling(($dt - [DateTimeOffset]::UtcNow).TotalSeconds)
-            }
-          } elseif ($hdrs.ContainsKey('x-ratelimit-reset')) {
-            $resetEpoch = [long]$hdrs['x-ratelimit-reset']
-            $reset = [DateTimeOffset]::FromUnixTimeSeconds($resetEpoch)
-            $sleep = [int][Math]::Max(1, [Math]::Ceiling(($reset - [DateTimeOffset]::UtcNow).TotalSeconds))
-          } else {
-            $sleep = [Math]::Min(60, [int]([Math]::Pow(2, $attempt)) * $BaseDelaySeconds)
+  $attempt = 0
+  $lastErr = $null
+  while($attempt -lt [math]::Max(1,$MaxAttempts)){
+    $attempt++
+    try {
+      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
+      $json = $res.choices[0].message.content
+      try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
+    } catch {
+      $lastErr = $_
+      $status = $null
+      try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
+      if($status -eq 401){ throw "Model API unauthorized (401). Ensure GITHUB_TOKEN has models:read scope." }
+      $isRate = ($status -eq 429 -or $status -eq 403)
+      $isServer = ($status -ge 500)
+      if(-not ($isRate -or $isServer) -or $attempt -ge $MaxAttempts){ break }
+      # Derive delay from headers when rate limited; else exponential with jitter
+      $delay = $null
+      $resp = $null
+      try { $resp = $_.Exception.Response } catch {}
+      if($isRate -and $resp){
+        $retryAfter = $resp.Headers['Retry-After']
+        if($retryAfter){
+          if($retryAfter -match '^\d+$'){ $delay = [int]$retryAfter } else {
+            try { $dt=[DateTime]::Parse($retryAfter); $delay = [math]::Max(1,[int][math]::Ceiling(($dt.ToUniversalTime()-[DateTime]::UtcNow).TotalSeconds)) } catch {}
           }
-
-          Write-Host "Rate limit ($status). Attempt $attempt/$MaxRetries. Sleeping $sleep s..."
-          Start-Sleep -Seconds $sleep
-          if ($attempt -eq $MaxRetries) { throw }
+        }
+        if(-not $delay){
+          $reset = $resp.Headers['x-ratelimit-reset']
+          if($reset -and $reset -match '^\d+$'){
+            try { $resetDt=[DateTimeOffset]::FromUnixTimeSeconds([long]$reset); $delay=[math]::Max(1,[int][math]::Ceiling(($resetDt.UtcDateTime-[DateTime]::UtcNow).TotalSeconds)) } catch {}
+          }
         }
       }
-
-
-
-  # $attempt = 0
-  # $lastErr = $null
-  # while($attempt -lt [math]::Max(1,$MaxAttempts)){
-  #   $attempt++
-  #   try {
-  #     $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
-  #     $json = $res.choices[0].message.content
-  #     try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
-  #   } catch {
-  #     $lastErr = $_
-  #     $status = $null
-  #     try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
-  #     $isTransient = $false
-  #     if($status -eq 429 -or $status -ge 500){ $isTransient = $true }
-  #     if(-not $isTransient -or $attempt -ge $MaxAttempts){ break }
-  #     $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
-  #     # Jitter 0-400ms
-  #     $jitterMs = Get-Random -Minimum 0 -Maximum 400
-  #     Log ("  Model 429/5xx attempt {0}/{1}; waiting {2}s (+{3}ms)" -f $attempt,$MaxAttempts,[int]$delay,$jitterMs)
-  #     Start-Sleep -Seconds $delay
-  #     Start-Sleep -Milliseconds $jitterMs
-  #   }
-  # }
-  # throw $lastErr
+      if(-not $delay){
+        $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
+      }
+      $jitterMs = Get-Random -Minimum 0 -Maximum 400
+      Log ("  Transient model error {0} attempt {1}/{2}; sleeping {3}s +{4}ms" -f $status,$attempt,$MaxAttempts,[int]$delay,$jitterMs)
+      Start-Sleep -Seconds $delay; Start-Sleep -Milliseconds $jitterMs
+    }
+  }
+  throw $lastErr
 }
 
 # --- Utilities
