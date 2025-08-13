@@ -20,7 +20,7 @@ param(
 
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
-  [string]$Frequencies = 'Azure=weekly,GitHub=weekly,Terraform=weekly'
+  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=monthly'
   ,
   # Time window mode: 'week' (Mon-Sun current week) or 'rolling'
   [ValidateSet('week','rolling')][string]$WindowType = 'week',
@@ -35,13 +35,7 @@ param(
   [int]$SummaryRetryBaseSeconds = 2
   ,
   # Always log external feed/API URLs (not only via -Verbose)
-  [switch]$ShowApiUrls,
-  # When first model 429/403 rate limit is hit, skip all remaining summaries (fast fail fallback)
-  [switch]$SkipOnFirstRateLimit,
-  # Path (relative or absolute) for persistent JSON summary cache (reduces repeat model calls)
-  [string]$SummaryCachePath = '.github/cache/summary-cache.json',
-  # Perform a preflight GitHub rate limit check & log before first model call
-  [switch]$PreflightRateLimit
+  [switch]$ShowApiUrls
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -102,14 +96,18 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
   Write-Warning "Frequencies value '$Frequencies' does not contain '='; did you forget a comma between Terraform repos? Use: -TerraformRepos 'org/a','org/b'"
 }
 
-<# Removed temporary debug output for TerraformRepos enumeration #>
+Write-Host "!!!!!Test"
+$myArray = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
+foreach ($item in $TerraformRepos) {
+     Write-Host "!!!!Item: $item"
+}
 
 # Validate pattern
 $invalid = @()
 foreach($tr in $TerraformRepos)
-{
+{ 
   Log "Validating Terraform repo: $tr"
-  if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr }
+  if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr } 
 }
 if($invalid.Count -gt 0){ throw "Invalid TerraformRepos entries (expect owner/repo): $($invalid -join ', ')" }
 Log ("TerraformRepos ({0}): {1}" -f $TerraformRepos.Count, ($TerraformRepos -join ', '))
@@ -137,7 +135,7 @@ $TerraformWindowEndUtc = $weekEndUtc
 function Invoke-GitHubModelChat {
   param(
     [Parameter(Mandatory)] [string]$Prompt,
-    [string]$Model = 'openai/gpt-4.1', # 'openai/gpt-4o-mini',
+    [string]$Model = 'openai/gpt-4o-mini',
     [decimal]$Temperature = 0.2,
     [int]$MaxTokens = 350,
     [int]$MaxAttempts = $MaxSummaryRetries,
@@ -166,78 +164,27 @@ function Invoke-GitHubModelChat {
     )
   } | ConvertTo-Json -Depth 8
 
-  $uri = 'https://models.github.ai/inference/chat/completions'
   $attempt = 0
   $lastErr = $null
   while($attempt -lt [math]::Max(1,$MaxAttempts)){
     $attempt++
     try {
-      $respHeaders = $null
-      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
-
-      # $r = $_.Exception.Response
-      # if ($r) {
-      #   "Status: " + $r.StatusCode.value__ | Write-Host
-      #   foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
-      # }
-      # throw
-
-      # Rate limit headers (best effort) from response headers variable (Invoke-RestMethod does not attach headers to body)
-      if($respHeaders){
-        $rlRemain = $respHeaders['x-ratelimit-remaining']
-        $rlLimit  = $respHeaders['x-ratelimit-limit']
-        $rlReset  = $respHeaders['x-ratelimit-reset']
-        if($attempt -eq 1 -and $rlRemain){ Log ("  Model rate: remaining={0}/{1} reset={2}" -f $rlRemain,$rlLimit,$rlReset) }
-      }
+      $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
       $json = $res.choices[0].message.content
       try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
     } catch {
       $lastErr = $_
-
-      $r = $lastErr.Exception.Response
-      if ($r) {
-        "Status: " + $r.StatusCode.value__ | Write-Host
-        foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
-      }
-      throw
       $status = $null
       try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
-      if($status -eq 401){ throw "Model API unauthorized (401). Ensure GITHUB_TOKEN has models:read scope." }
-      $isRate = ($status -eq 429 -or $status -eq 403)
-      $isServer = ($status -ge 500)
-      if(-not ($isRate -or $isServer) -or $attempt -ge $MaxAttempts){ break }
-      # Derive delay from headers when rate limited; else exponential with jitter
-      $delay = $null
-      $resp = $null
-      try { $resp = $_.Exception.Response } catch {}
-      if($isRate -and $resp){
-        $retryAfter = $resp.Headers['Retry-After']
-        if($retryAfter){
-          if($retryAfter -match '^\d+$'){ $delay = [int]$retryAfter } else {
-            try { $dt=[DateTime]::Parse($retryAfter); $delay = [math]::Max(1,[int][math]::Ceiling(($dt.ToUniversalTime()-[DateTime]::UtcNow).TotalSeconds)) } catch {}
-          }
-        }
-        if(-not $delay){
-          $reset = $resp.Headers['x-ratelimit-reset']
-          if($reset -and $reset -match '^\d+$'){
-            try { $resetDt=[DateTimeOffset]::FromUnixTimeSeconds([long]$reset); $delay=[math]::Max(1,[int][math]::Ceiling(($resetDt.UtcDateTime-[DateTime]::UtcNow).TotalSeconds)) } catch {}
-          }
-        }
-        $remainNow = $resp.Headers['x-ratelimit-remaining']
-        $limitNow  = $resp.Headers['x-ratelimit-limit']
-        $resetNow  = $resp.Headers['x-ratelimit-reset']
-        Log ("  Rate limit hit ({0}) remain={1} limit={2} reset={3}" -f $status,$remainNow,$limitNow,$resetNow)
-        if($SkipOnFirstRateLimit -and $attempt -eq 1){
-          Log '  SkipOnFirstRateLimit active: returning minimal fallback summary.'
-          return @{ summary = 'Rate limit reached; raw title used.' }
-        }
-      }
-      if(-not $delay){
-        $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
-      }
+      $isTransient = $false
+      if($status -eq 429 -or $status -ge 500){ $isTransient = $true }
+      if(-not $isTransient -or $attempt -ge $MaxAttempts){ break }
+      $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
+      # Jitter 0-400ms
       $jitterMs = Get-Random -Minimum 0 -Maximum 400
-      Log ("  Transient model error {0} attempt {1}/{2}; sleeping {3}s +{4}ms" -f $status,$attempt,$MaxAttempts,[int]$delay,$jitterMs)
-      Start-Sleep -Seconds $delay; Start-Sleep -Milliseconds $jitterMs
+      Log ("  Model 429/5xx attempt {0}/{1}; waiting {2}s (+{3}ms)" -f $attempt,$MaxAttempts,[int]$delay,$jitterMs)
+      Start-Sleep -Seconds $delay
+      Start-Sleep -Milliseconds $jitterMs
     }
   }
   throw $lastErr
@@ -337,7 +284,7 @@ function Get-TerraformReleases {
   # $repoArray = $repoArray | Where-Object { $_ -and ($_ -is [string]) }
   # $joinedRepos = if($repoArray.Count -gt 0){ $repoArray -join ', ' } else { '(none)' }
   # Log "Terraform repositories: $joinedRepos"
-  foreach($rr in $TerraformRepos){
+  foreach($rr in $TerraformRepos){ 
     if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
   $items = @()
   $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0
@@ -417,37 +364,7 @@ RAW:\n$([string]$item.raw)
 $summaries = @()
 $swSumm = [System.Diagnostics.Stopwatch]::StartNew()
 if($MaxSummaryRetries -lt 1){ $MaxSummaryRetries = 1 }
-# --- Persistent summary cache load
 $SummaryCache = @{}
-$persistCacheFile = if([IO.Path]::IsPathRooted($SummaryCachePath)){ $SummaryCachePath } else { Join-Path $RepoRoot $SummaryCachePath }
-if(Test-Path $persistCacheFile){
-  try {
-    $raw = Get-Content -Raw -Path $persistCacheFile -ErrorAction Stop
-    if($raw.Trim()){
-      $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
-      foreach($entry in $parsed){
-        if($entry.PSObject.Properties.Name -contains 'key'){
-          $SummaryCache[$entry.key] = [pscustomobject]@{ source=$entry.source; title=$entry.title; url=$entry.url; date=$entry.date; summary=$entry.summary; bullets=$entry.bullets }
-        }
-      }
-      Log ("Loaded summary cache entries: {0}" -f $SummaryCache.Count)
-    }
-  } catch { Write-Warning "Failed to load summary cache: $($_.Exception.Message)" }
-}
-else {
-  # Ensure directory exists
-  try { $dir=[IO.Path]::GetDirectoryName($persistCacheFile); if($dir -and -not (Test-Path $dir)){ New-Item -ItemType Directory -Force -Path $dir | Out-Null } } catch {}
-}
-
-if($PreflightRateLimit){
-  try {
-    $rlRespHeaders = $null
-    $rl = Invoke-RestMethod -Method GET -Uri 'https://api.github.com/rate_limit' -Headers $HeadersGitHub -ErrorAction Stop -ResponseHeadersVariable rlRespHeaders
-    if($rl.resources.core){
-      Log ("Preflight rate core: remaining={0}/{1} reset={2}" -f $rl.resources.core.remaining,$rl.resources.core.limit,$rl.resources.core.reset)
-    }
-  } catch { Write-Warning "Preflight rate check failed: $($_.Exception.Message)" }
-}
 if($DisableSummaries){
   Log "Summaries disabled (-DisableSummaries); using raw titles only"
   foreach($i in $all){ if(-not $i){ continue }; $summaries += [pscustomobject]@{ source=$i.source; title=$i.title; url=$i.url; date=$i.publishedAt.ToString('yyyy-MM-dd'); summary=Trunc($i.raw,200); bullets=@() } }
@@ -465,7 +382,7 @@ if($DisableSummaries){
       $summaries += $SummaryCache[$cacheKey]
       $swItem.Stop(); continue
     }
-    try {
+    try { 
       $sum = Get-ItemSummary $i
       $summaries += $sum
       $SummaryCache[$cacheKey] = $sum
@@ -480,17 +397,6 @@ if($DisableSummaries){
   }
   Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
 }
-# --- Persist summary cache (append new entries overwriting existing file)
-try {
-  $export = @()
-  foreach($k in $SummaryCache.Keys){
-    $v = $SummaryCache[$k]
-    $export += [pscustomobject]@{ key=$k; source=$v.source; title=$v.title; url=$v.url; date=$v.date; summary=$v.summary; bullets=$v.bullets }
-  }
-  $json = $export | ConvertTo-Json -Depth 6
-  Set-Content -Path $persistCacheFile -Value $json -Encoding UTF8
-  Log ("Saved summary cache entries: {0} -> {1}" -f $SummaryCache.Count,$persistCacheFile)
-} catch { Write-Warning "Failed to save summary cache: $($_.Exception.Message)" }
 $bySource = $summaries | Group-Object source | Sort-Object Name
 
 # --- Renderers
@@ -542,9 +448,11 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   if(-not $items -or $items.Count -eq 0){ return $null }
   $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($winStartUtc,$tz)
   $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($winEndUtc,$tz)
+  # Tags: primary = cadence (weekly|biweekly|monthly), secondary = source tag
   $cadenceTag = if($freq){ $freq } else { 'weekly' }
   $tagsArr = @('updates', $cadenceTag, $tag) | Select-Object -Unique
 
+  # Determine dynamic title & slug
   switch($freq){
     'biweekly' {
       $w1 = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
@@ -574,6 +482,7 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   }
 
   $desc  = "Highlights from $typeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
+  $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
   $body = Convert-ItemsToMarkdown -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
 
   $targetDir = Join-Path $RepoRoot $ContentDir
@@ -581,38 +490,8 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   $folder = Join-Path $targetDir $folderName
   New-Item -ItemType Directory -Force -Path $folder | Out-Null
   $file = Join-Path $folder 'index.md'
-
-  $nowIso = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
-
-  if(Test-Path $file){
-    # Update lastmod only; preserve original front matter (title/date/tags/description/etc.)
-    $existingLines = Get-Content -Path $file
-    $openIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -First 1).LineNumber - 1
-    $closeIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -Skip 1 -First 1).LineNumber - 1
-    if($openIdx -ge 0 -and $closeIdx -gt $openIdx){
-      for($i = $openIdx+1; $i -lt $closeIdx; $i++){
-        if($existingLines[$i] -match '^\s*lastmod\s*='){ $existingLines[$i] = "lastmod = $nowIso" }
-      }
-      if(-not ($existingLines[$openIdx+1..($closeIdx-1)] -match '^\s*lastmod\s*=')){
-        # Insert lastmod before closing delimiter
-        $existingLines = @($existingLines[0..($closeIdx-1)] + @("lastmod = $nowIso") + $existingLines[$closeIdx..($existingLines.Count-1)])
-        # Recompute closeIdx not needed further
-      }
-      $frontMatter = $existingLines[0..$closeIdx]
-      $newContent = ($frontMatter + '' + $body.TrimEnd())
-      Log "Updating existing post (lastmod + body): $file"
-      Set-Content -Path $file -Value $newContent -Encoding UTF8
-    } else {
-      # Fallback: regenerate full front matter if delimiters not found
-      $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
-      Log "Regenerating malformed front matter: $file"
-      Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
-    }
-  } else {
-    $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
-    Log "Writing new post: $file"
-    Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
-  }
+  Log "Writing post: $file"
+  Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
   return $file
 }
 
