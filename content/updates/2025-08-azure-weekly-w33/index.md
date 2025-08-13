@@ -1,7 +1,7 @@
 +++
 title = 'Azure Weekly – 2025 Week 33'
-date = 2025-08-13T10:17:53Z
-lastmod = 2025-08-13T10:17:53Z
+date = 2025-08-13T10:19:19Z
+lastmod = 2025-08-13T10:19:19Z
 draft = false
 tags = ['updates', 'weekly', 'azure']
 description = 'Highlights from Azure between 2025-08-11 and 2025-08-17.'
