@@ -35,7 +35,9 @@ param(
   [int]$SummaryRetryBaseSeconds = 2
   ,
   # Always log external feed/API URLs (not only via -Verbose)
-  [switch]$ShowApiUrls
+  [switch]$ShowApiUrls,
+  # Optional: verbose structured dump of computed summaries
+  [switch]$DumpSummaries
 )
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
@@ -384,6 +386,20 @@ if($DisableSummaries){
   Log ("Summarization phase took {0:n1}s" -f $swSumm.Elapsed.TotalSeconds)
 }
 $bySource = $summaries | Group-Object source | Sort-Object Name
+
+if($DumpSummaries){
+  Log ("DumpSummaries enabled. Total summaries: {0}" -f $summaries.Count)
+  $idx=0
+  foreach($s in $summaries){
+    $idx++
+    $t = Trunc $s.title 70
+    $sumShort = Trunc $s.summary 160
+    Log ("  [{0}/{1}] {2} :: {3} :: {4}" -f $idx,$summaries.Count,$s.source,$t,$sumShort)
+    if($s.bullets -and $s.bullets.Count -gt 0){
+      foreach($b in $s.bullets){ Log ("     - " + (Trunc $b 140)) }
+    }
+  }
+}
 
 # --- Renderers
 function New-FrontMatter([string]$title,[string]$desc,[string[]]$tags){
