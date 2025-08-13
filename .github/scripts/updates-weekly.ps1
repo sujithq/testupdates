@@ -20,7 +20,7 @@ param(
 
   # Per-source publish cadence (weekly|biweekly|monthly), comma-separated key=value
   # Example: Azure=weekly,GitHub=biweekly,Terraform=weekly
-  [string]$Frequencies = 'Azure=weekly,GitHub=biweekly,Terraform=monthly'
+  [string]$Frequencies = 'Azure=weekly,GitHub=weekly,Terraform=weekly'
   ,
   # Time window mode: 'week' (Mon-Sun current week) or 'rolling'
   [ValidateSet('week','rolling')][string]$WindowType = 'week',
@@ -96,18 +96,14 @@ if($TerraformRepos.Count -eq 1 -and $Frequencies -and $Frequencies -notmatch '='
   Write-Warning "Frequencies value '$Frequencies' does not contain '='; did you forget a comma between Terraform repos? Use: -TerraformRepos 'org/a','org/b'"
 }
 
-Write-Host "!!!!!Test"
-$myArray = @("hashicorp/terraform", "hashicorp/terraform-provider-azurerm")
-foreach ($item in $TerraformRepos) {
-     Write-Host "!!!!Item: $item"
-}
+<# Removed temporary debug output for TerraformRepos enumeration #>
 
 # Validate pattern
 $invalid = @()
 foreach($tr in $TerraformRepos)
-{ 
+{
   Log "Validating Terraform repo: $tr"
-  if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr } 
+  if($tr -notmatch '^[^/]+/[^/]+$'){ $invalid += $tr }
 }
 if($invalid.Count -gt 0){ throw "Invalid TerraformRepos entries (expect owner/repo): $($invalid -join ', ')" }
 Log ("TerraformRepos ({0}): {1}" -f $TerraformRepos.Count, ($TerraformRepos -join ', '))
@@ -164,30 +160,76 @@ function Invoke-GitHubModelChat {
     )
   } | ConvertTo-Json -Depth 8
 
-  $attempt = 0
-  $lastErr = $null
-  while($attempt -lt [math]::Max(1,$MaxAttempts)){
-    $attempt++
-    try {
-      $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
-      $json = $res.choices[0].message.content
-      try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
-    } catch {
-      $lastErr = $_
-      $status = $null
-      try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
-      $isTransient = $false
-      if($status -eq 429 -or $status -ge 500){ $isTransient = $true }
-      if(-not $isTransient -or $attempt -ge $MaxAttempts){ break }
-      $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
-      # Jitter 0-400ms
-      $jitterMs = Get-Random -Minimum 0 -Maximum 400
-      Log ("  Model 429/5xx attempt {0}/{1}; waiting {2}s (+{3}ms)" -f $attempt,$MaxAttempts,[int]$delay,$jitterMs)
-      Start-Sleep -Seconds $delay
-      Start-Sleep -Milliseconds $jitterMs
-    }
-  }
-  throw $lastErr
+
+        for ($attempt = 0; $attempt -le $MaxAttempts; $attempt++) {
+        try {
+          $resp = Invoke-RestMethod -Method POST -Uri $uri -Headers $headers -Body $body
+          return $resp
+        } catch {
+          # Extract response + headers if available
+          $we = $_.Exception
+          $httpResp = $we.Response
+          if (-not $httpResp) { throw }  # Non-HTTP error
+
+          $status = $httpResp.StatusCode.value__
+          $rateLimited = ($status -eq 429 -or $status -eq 403)
+          if (-not $rateLimited) { throw }
+
+          # Pull headers for guidance
+          $hdrs = @{}
+          try {
+            foreach ($k in $httpResp.Headers.AllKeys) { $hdrs[$k.ToLower()] = $httpResp.Headers[$k] }
+          } catch {}
+
+          # Decide sleep: prefer Retry-After; else use x-ratelimit-reset; else capped exponential backoff
+          $sleep = $null
+          if ($hdrs.ContainsKey('retry-after')) {
+            $ra = $hdrs['retry-after']
+            if ($ra -match '^\d+$') { $sleep = [int]$ra }
+            else {
+              $dt = [DateTimeOffset]::Parse($ra)
+              $sleep = [int][Math]::Ceiling(($dt - [DateTimeOffset]::UtcNow).TotalSeconds)
+            }
+          } elseif ($hdrs.ContainsKey('x-ratelimit-reset')) {
+            $resetEpoch = [long]$hdrs['x-ratelimit-reset']
+            $reset = [DateTimeOffset]::FromUnixTimeSeconds($resetEpoch)
+            $sleep = [int][Math]::Max(1, [Math]::Ceiling(($reset - [DateTimeOffset]::UtcNow).TotalSeconds))
+          } else {
+            $sleep = [Math]::Min(60, [int]([Math]::Pow(2, $attempt)) * $BaseDelaySeconds)
+          }
+
+          Write-Host "Rate limit ($status). Attempt $attempt/$MaxRetries. Sleeping $sleep s..."
+          Start-Sleep -Seconds $sleep
+          if ($attempt -eq $MaxRetries) { throw }
+        }
+      }
+
+
+
+  # $attempt = 0
+  # $lastErr = $null
+  # while($attempt -lt [math]::Max(1,$MaxAttempts)){
+  #   $attempt++
+  #   try {
+  #     $res = Invoke-RestMethod -Method POST -Uri 'https://models.github.ai/inference/chat/completions' -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
+  #     $json = $res.choices[0].message.content
+  #     try { return ($json | ConvertFrom-Json) } catch { return @{ summary = $json } }
+  #   } catch {
+  #     $lastErr = $_
+  #     $status = $null
+  #     try { $status = $_.Exception.Response.StatusCode.Value__ } catch {}
+  #     $isTransient = $false
+  #     if($status -eq 429 -or $status -ge 500){ $isTransient = $true }
+  #     if(-not $isTransient -or $attempt -ge $MaxAttempts){ break }
+  #     $delay = [math]::Min(90, $BaseDelaySeconds * [math]::Pow(2, ($attempt-1)))
+  #     # Jitter 0-400ms
+  #     $jitterMs = Get-Random -Minimum 0 -Maximum 400
+  #     Log ("  Model 429/5xx attempt {0}/{1}; waiting {2}s (+{3}ms)" -f $attempt,$MaxAttempts,[int]$delay,$jitterMs)
+  #     Start-Sleep -Seconds $delay
+  #     Start-Sleep -Milliseconds $jitterMs
+  #   }
+  # }
+  # throw $lastErr
 }
 
 # --- Utilities
@@ -284,7 +326,7 @@ function Get-TerraformReleases {
   # $repoArray = $repoArray | Where-Object { $_ -and ($_ -is [string]) }
   # $joinedRepos = if($repoArray.Count -gt 0){ $repoArray -join ', ' } else { '(none)' }
   # Log "Terraform repositories: $joinedRepos"
-  foreach($rr in $TerraformRepos){ 
+  foreach($rr in $TerraformRepos){
     if($rr -notmatch '^[^/]+/[^/]+$'){ Write-Warning "Repo value '$rr' does not match owner/repo pattern" } }
   $items = @()
   $totalFetched = 0; $totalIncluded = 0; $totalSkippedWindow = 0
@@ -382,7 +424,7 @@ if($DisableSummaries){
       $summaries += $SummaryCache[$cacheKey]
       $swItem.Stop(); continue
     }
-    try { 
+    try {
       $sum = Get-ItemSummary $i
       $summaries += $sum
       $SummaryCache[$cacheKey] = $sum
@@ -448,11 +490,9 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   if(-not $items -or $items.Count -eq 0){ return $null }
   $winStartLocal = [System.TimeZoneInfo]::ConvertTimeFromUtc($winStartUtc,$tz)
   $winEndLocal   = [System.TimeZoneInfo]::ConvertTimeFromUtc($winEndUtc,$tz)
-  # Tags: primary = cadence (weekly|biweekly|monthly), secondary = source tag
   $cadenceTag = if($freq){ $freq } else { 'weekly' }
   $tagsArr = @('updates', $cadenceTag, $tag) | Select-Object -Unique
 
-  # Determine dynamic title & slug
   switch($freq){
     'biweekly' {
       $w1 = [System.Globalization.ISOWeek]::GetWeekOfYear($winStartLocal)
@@ -482,7 +522,6 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   }
 
   $desc  = "Highlights from $typeName between $($winStartLocal.ToString('yyyy-MM-dd')) and $($winEndLocal.ToString('yyyy-MM-dd'))."
-  $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
   $body = Convert-ItemsToMarkdown -items $items -windowStartLocal $winStartLocal -windowEndLocal $winEndLocal
 
   $targetDir = Join-Path $RepoRoot $ContentDir
@@ -490,8 +529,38 @@ function Write-PerTypePost($typeName,$baseSlug,$items,$tag,$freq,$winStartUtc,$w
   $folder = Join-Path $targetDir $folderName
   New-Item -ItemType Directory -Force -Path $folder | Out-Null
   $file = Join-Path $folder 'index.md'
-  Log "Writing post: $file"
-  Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+
+  $nowIso = [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ssZ')
+
+  if(Test-Path $file){
+    # Update lastmod only; preserve original front matter (title/date/tags/description/etc.)
+    $existingLines = Get-Content -Path $file
+    $openIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -First 1).LineNumber - 1
+    $closeIdx = ($existingLines | Select-String -SimpleMatch '+++' | Select-Object -Skip 1 -First 1).LineNumber - 1
+    if($openIdx -ge 0 -and $closeIdx -gt $openIdx){
+      for($i = $openIdx+1; $i -lt $closeIdx; $i++){
+        if($existingLines[$i] -match '^\s*lastmod\s*='){ $existingLines[$i] = "lastmod = $nowIso" }
+      }
+      if(-not ($existingLines[$openIdx+1..($closeIdx-1)] -match '^\s*lastmod\s*=')){
+        # Insert lastmod before closing delimiter
+        $existingLines = @($existingLines[0..($closeIdx-1)] + @("lastmod = $nowIso") + $existingLines[$closeIdx..($existingLines.Count-1)])
+        # Recompute closeIdx not needed further
+      }
+      $frontMatter = $existingLines[0..$closeIdx]
+      $newContent = ($frontMatter + '' + $body.TrimEnd())
+      Log "Updating existing post (lastmod + body): $file"
+      Set-Content -Path $file -Value $newContent -Encoding UTF8
+    } else {
+      # Fallback: regenerate full front matter if delimiters not found
+      $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
+      Log "Regenerating malformed front matter: $file"
+      Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+    }
+  } else {
+    $fm = New-FrontMatter -title $title -desc $desc -tags $tagsArr
+    Log "Writing new post: $file"
+    Set-Content -Path $file -Value ($fm + $body) -Encoding UTF8
+  }
   return $file
 }
 
