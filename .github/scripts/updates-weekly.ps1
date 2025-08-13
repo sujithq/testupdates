@@ -254,8 +254,9 @@ function Format-LinkUrl([string]$u){ if(-not $u){ return '' }; $clean = $u.Trim(
 
 # --- Source fetchers (parameterized)
 $AzureRss = 'https://aztty.azurewebsites.net/rss/updates'
-function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[int]$Max = 20,[switch]$ShowUrls)
+function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[Alias('Max')][int]$MaxItems = 20,[switch]$ShowUrls)
   Log 'Fetch: Azure updates (Azure Charts RSS)'
+  Log "Azure limit = $MaxItems"
   if($ShowUrls){ Log "URL: $AzureRss" }
   try {
     $resp = Invoke-WebRequest -Uri $AzureRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -269,13 +270,14 @@ function Get-AzureUpdates { param([datetime]$StartUtc,[datetime]$EndUtc,[int]$Ma
       if($pub -lt $StartUtc -or $pub -gt $EndUtc){ continue }
       [pscustomobject]@{ source='Azure'; title=[string]$i.title; url=[string]$i.link; publishedAt=$pub.ToUniversalTime(); raw=[string]$i.description }
     }
-    return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $Max
+  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxItems
   } catch { Write-Warning "Azure RSS failed: $($_.Exception.Message)"; return @() }
 }
 
 $GitHubChangelogRss = 'https://github.blog/changelog/feed/'
-function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[int]$Max = 12,[switch]$ShowUrls)
+function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[Alias('Max')][int]$MaxItems = 12,[switch]$ShowUrls)
   Log 'Fetch: GitHub Changelog RSS'
+  Log "GitHub changelog limit = $MaxItems"
   if($ShowUrls){ Log "URL: $GitHubChangelogRss" }
   try {
     $resp = Invoke-WebRequest -Uri $GitHubChangelogRss -Headers @{ 'User-Agent'='weekly-hugo-tracker' } -UseBasicParsing -ErrorAction Stop
@@ -289,7 +291,7 @@ function Get-GitHubChangelog { param([datetime]$StartUtc,[datetime]$EndUtc,[int]
       if($pub -lt $StartUtc -or $pub -gt $EndUtc){ continue }
       [pscustomobject]@{ source='GitHub'; title=[string]$i.title; url=[string]$i.link; publishedAt=$pub.ToUniversalTime(); raw=Trunc([string]$i.'content:encoded',2000) }
     }
-    return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $Max
+  return ($items | Where-Object { $_ }) | Sort-Object publishedAt -Descending | Select-Object -First $MaxItems
   } catch { Write-Warning "GitHub Changelog RSS failed: $($_.Exception.Message)"; return @() }
 }
 
@@ -303,11 +305,12 @@ function Get-TerraformReleases { param(
     [string[]]$Repos,
     [datetime]$StartUtc,
     [datetime]$EndUtc,
-    [int]$Max = 8,
+    [Alias('Max')][int]$MaxItems = 8,
     [hashtable]$HeadersGitHub,
     [switch]$ShowUrls
   )
   Log 'Fetch: Terraform releases'
+  Log "Terraform limit = $MaxItems"
   $items=@(); $totalSkippedWindow=0
   $sw=[System.Diagnostics.Stopwatch]::StartNew()
   foreach($full in $Repos){
@@ -329,7 +332,7 @@ function Get-TerraformReleases { param(
   }
   $items = $items | Sort-Object publishedAt -Descending
   $beforeCap = $items.Count
-  $capped = $items | Select-Object -First $Max
+  $capped = $items | Select-Object -First $MaxItems
   $sw.Stop()
   Log ("Terraform summary: included={0} (pre-cap {1}), skippedWindow={2}, elapsed={3:n1}s" -f $capped.Count,$beforeCap,$totalSkippedWindow,$sw.Elapsed.TotalSeconds)
   return $capped
@@ -504,9 +507,9 @@ function Invoke-WeeklyUpdates {
   $baseWindow = Compute-BaseWindow -WindowType $WindowType -RollingDays $RollingDays -TimeZone $tz
   $per = Compute-PerSourceWindows -FrequencyMap $FrequencyMap -BaseWindow $baseWindow -TimeZone $tz
   # Collect
-  $azure = Get-AzureUpdates -StartUtc $per.AzureStart -EndUtc $per.AzureEnd -Max $MaxAzure -ShowUrls:$ShowApiUrls
-  $ghchg = Get-GitHubChangelog -StartUtc $per.GitHubStart -EndUtc $per.GitHubEnd -Max $MaxGitHub -ShowUrls:$ShowApiUrls
-  $tf    = Get-TerraformReleases -Repos $TerraformRepos -StartUtc $per.TerraformStart -EndUtc $per.TerraformEnd -Max $MaxTerraform -HeadersGitHub $HeadersGitHub -ShowUrls:$ShowApiUrls
+  $azure = Get-AzureUpdates -StartUtc $per.AzureStart -EndUtc $per.AzureEnd -MaxItems $MaxAzure -ShowUrls:$ShowApiUrls
+  $ghchg = Get-GitHubChangelog -StartUtc $per.GitHubStart -EndUtc $per.GitHubEnd -MaxItems $MaxGitHub -ShowUrls:$ShowApiUrls
+  $tf    = Get-TerraformReleases -Repos $TerraformRepos -StartUtc $per.TerraformStart -EndUtc $per.TerraformEnd -MaxItems $MaxTerraform -HeadersGitHub $HeadersGitHub -ShowUrls:$ShowApiUrls
   Log ("Collected: Azure={0}, GitHub={1}, Terraform={2}" -f $azure.Count,$ghchg.Count,$tf.Count)
   $all = @($azure + $ghchg + $tf)
   $summaries = Summarize-Items -AllItems $all -DisableSummaries:$DisableSummaries -MaxSummaryRetries $MaxSummaryRetries -SummaryRetryBaseSeconds $SummaryRetryBaseSeconds -HeadersGitHub $HeadersGitHub -DumpSummaries:$DumpSummaries
