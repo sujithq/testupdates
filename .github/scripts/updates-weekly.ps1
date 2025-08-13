@@ -173,7 +173,7 @@ function Invoke-GitHubModelChat {
     $attempt++
     try {
       $respHeaders = $null
-      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop -ResponseHeadersVariable respHeaders
+      $res = Invoke-RestMethod -Method POST -Uri $uri -Headers $HeadersGitHub -ContentType 'application/json' -Body $body -ErrorAction Stop
 
       # $r = $_.Exception.Response
       # if ($r) {
