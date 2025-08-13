@@ -178,7 +178,7 @@ function Invoke-GitHubModelChat {
       $r = $_.Exception.Response
       if ($r) {
         "Status: " + $r.StatusCode.value__ | Write-Host
-        foreach ($k in $r.Headers.AllKeys) { "$k: " + $r.Headers[$k] | Write-Host }
+        foreach ($k in $r.Headers.AllKeys) { "$k => " + $r.Headers[$k] | Write-Host }
       }
       throw
 
